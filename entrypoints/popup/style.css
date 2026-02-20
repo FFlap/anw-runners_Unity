@@ -1,0 +1,357 @@
+:root {
+  --unity-bg: #f3efe7;
+  --unity-surface: #fffaf2;
+  --unity-border: #d9ccb9;
+  --unity-text: #2a241d;
+  --unity-muted: #6f6256;
+  --unity-accent: #c8652a;
+  --unity-accent-strong: #9f4615;
+  --unity-user: #1f5e73;
+  --unity-user-bg: #d9eef5;
+  --unity-assistant-bg: #fff4df;
+  --unity-danger: #b53333;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 400px;
+  max-width: 400px;
+  background: var(--unity-bg);
+  color: var(--unity-text);
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+button,
+textarea,
+input {
+  font: inherit;
+}
+
+.unity-shell {
+  display: flex;
+  flex-direction: column;
+  height: 600px;
+  border: 1px solid var(--unity-border);
+  background: linear-gradient(180deg, #fff9ef 0%, #f8f1e5 100%);
+}
+
+.unity-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--unity-border);
+  background: rgba(255, 250, 242, 0.9);
+}
+
+.kicker {
+  margin: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--unity-muted);
+}
+
+.unity-header h1 {
+  margin: 2px 0 0;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.header-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.icon-btn,
+.ghost-btn,
+.primary-btn,
+.source-chip {
+  border: 1px solid var(--unity-border);
+  background: var(--unity-surface);
+  color: var(--unity-text);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn:disabled,
+.ghost-btn:disabled,
+.primary-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--unity-border);
+  background: rgba(255, 250, 242, 0.75);
+}
+
+.status-row p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--unity-muted);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: 1px solid transparent;
+}
+
+.pill--idle {
+  background: #efe9df;
+  color: #5e5146;
+}
+
+.pill--extracting,
+.pill--analyzing,
+.pill--highlighting {
+  background: #fbeac8;
+  color: #8e5518;
+}
+
+.pill--done {
+  background: #dcf2de;
+  color: #276231;
+}
+
+.pill--error {
+  background: #f9dede;
+  color: #7f1f1f;
+}
+
+.warning-card,
+.empty-card {
+  margin: 10px 14px 0;
+  padding: 10px;
+  border: 1px solid var(--unity-border);
+  border-radius: 10px;
+  background: var(--unity-surface);
+}
+
+.warning-card p,
+.empty-card p {
+  margin: 0;
+}
+
+.empty-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.primary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border-color: var(--unity-accent);
+  background: var(--unity-accent);
+  color: #fff;
+}
+
+.primary-btn:hover:not(:disabled) {
+  background: var(--unity-accent-strong);
+  border-color: var(--unity-accent-strong);
+}
+
+.ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  background: transparent;
+}
+
+.chat-feed {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.empty-chat {
+  padding: 16px;
+  border: 1px dashed var(--unity-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.empty-chat p {
+  margin: 0;
+  color: var(--unity-muted);
+}
+
+.bubble {
+  border-radius: 10px;
+  border: 1px solid var(--unity-border);
+  padding: 8px 10px;
+}
+
+.bubble--user {
+  background: var(--unity-user-bg);
+  border-color: #91bfcd;
+}
+
+.bubble--assistant {
+  background: var(--unity-assistant-bg);
+}
+
+.bubble-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--unity-muted);
+}
+
+.bubble--user .bubble-head {
+  color: var(--unity-user);
+}
+
+.bubble-text {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+}
+
+.sources-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.source-chip {
+  font-size: 11px;
+  padding: 4px 8px;
+  background: #fff;
+}
+
+.source-chip:hover {
+  border-color: var(--unity-accent);
+}
+
+.composer {
+  border-top: 1px solid var(--unity-border);
+  background: rgba(255, 250, 242, 0.9);
+  padding: 10px 14px;
+}
+
+.composer textarea,
+.text-input {
+  width: 100%;
+  border: 1px solid var(--unity-border);
+  border-radius: 8px;
+  padding: 8px;
+  resize: vertical;
+  min-height: 56px;
+  background: #fffefc;
+  color: var(--unity-text);
+}
+
+.composer-actions {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.error-text {
+  margin: 8px 14px 0;
+  color: var(--unity-danger);
+  font-size: 12px;
+}
+
+.tab-url {
+  margin: 8px 14px 10px;
+  color: var(--unity-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(34, 29, 23, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+
+.modal {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--unity-border);
+  background: var(--unity-surface);
+  padding: 12px;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.modal-head h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.modal-note,
+.modal-feedback {
+  margin: 8px 0 0;
+  color: var(--unity-muted);
+  font-size: 12px;
+}
+
+.modal-row {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.spin {
+  animation: unity-spin 0.9s linear infinite;
+}
+
+@keyframes unity-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
