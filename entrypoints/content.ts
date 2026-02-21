@@ -13,6 +13,7 @@ import {
   insertDictationText,
   type DictationRecognitionLike,
 } from '@/lib/dictation';
+import { COLOR_BLIND_MODE_STORAGE_KEY } from '@/lib/storage';
 
 const PANEL_ID = 'unity-youtube-chat-root';
 const STYLE_ID = 'unity-youtube-chat-style';
@@ -171,16 +172,90 @@ function installStyles() {
   style.id = STYLE_ID;
   style.textContent = `
     #${PANEL_ID} {
+      --unity-panel-border: rgba(214, 190, 157, 0.7);
+      --unity-panel-bg-start: #fff8ee;
+      --unity-panel-bg-end: #f6ead7;
+      --unity-panel-text: #2b241d;
+      --unity-panel-shadow: rgba(52, 34, 18, 0.12);
+      --unity-panel-head-bg: rgba(255, 252, 247, 0.82);
+      --unity-panel-muted: #6f6152;
+      --unity-panel-btn-border: rgba(196, 167, 130, 0.9);
+      --unity-panel-btn-bg: #fffdf9;
+      --unity-panel-btn-text: #3b3026;
+      --unity-panel-btn-hover: #b86a2e;
+      --unity-panel-scroll-thumb: rgba(190, 160, 126, 0.7);
+      --unity-panel-empty-border: rgba(202, 177, 145, 0.8);
+      --unity-panel-empty-text: #7a6b5b;
+      --unity-panel-bubble-border: rgba(214, 190, 157, 0.8);
+      --unity-panel-bubble-user-bg: #d8ecf7;
+      --unity-panel-bubble-user-border: rgba(136, 181, 205, 0.95);
+      --unity-panel-bubble-assistant-bg: #fff4df;
+      --unity-panel-compose-bg: #fffefb;
+      --unity-panel-error: #b52f2f;
+      --unity-transcript-border: rgba(214, 190, 157, 0.85);
+      --unity-transcript-bg: rgba(255, 253, 248, 0.9);
+      --unity-transcript-row-border: rgba(214, 190, 157, 0.4);
+      --unity-transcript-row-bg: #fff;
+      --unity-transcript-current-border: rgba(184, 106, 46, 0.95);
+      --unity-transcript-current-shadow: rgba(184, 106, 46, 0.22);
+      --unity-transcript-current-bg: #fff8ea;
+      --unity-transcript-btn-bg: #fffefb;
+      --unity-transcript-btn-border: rgba(196, 167, 130, 0.9);
+      --unity-transcript-btn-text: #3b3026;
+      --unity-transcript-text: #3d3024;
+      --unity-focus-ring: transparent;
+      --unity-focus-ring-shadow: transparent;
+      --unity-transcript-stripe: transparent;
+      --unity-transcript-current-stripe: transparent;
+      --unity-transcript-current-outline: transparent;
       width: 100%;
       margin-bottom: 16px;
       border-radius: 12px;
-      border: 1px solid rgba(214, 190, 157, 0.7);
-      background: linear-gradient(180deg, #fff8ee 0%, #f6ead7 100%);
-      color: #2b241d;
+      border: 1px solid var(--unity-panel-border);
+      background: linear-gradient(180deg, var(--unity-panel-bg-start) 0%, var(--unity-panel-bg-end) 100%);
+      color: var(--unity-panel-text);
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      box-shadow: 0 10px 24px rgba(52, 34, 18, 0.12);
+      box-shadow: 0 10px 24px var(--unity-panel-shadow);
       overflow: hidden;
       z-index: 9998;
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] {
+      --unity-panel-border: #77879b;
+      --unity-panel-bg-start: #fcfdff;
+      --unity-panel-bg-end: #ecf2f8;
+      --unity-panel-text: #132132;
+      --unity-panel-shadow: rgba(12, 32, 56, 0.18);
+      --unity-panel-head-bg: #f6faff;
+      --unity-panel-muted: #304255;
+      --unity-panel-btn-border: #6e839a;
+      --unity-panel-btn-bg: #fbfdff;
+      --unity-panel-btn-text: #1a2f46;
+      --unity-panel-btn-hover: #075ead;
+      --unity-panel-scroll-thumb: rgba(73, 101, 133, 0.65);
+      --unity-panel-empty-border: #8ea2b9;
+      --unity-panel-empty-text: #384d64;
+      --unity-panel-bubble-border: #7d92a6;
+      --unity-panel-bubble-user-bg: #e5f0fa;
+      --unity-panel-bubble-user-border: #628ab3;
+      --unity-panel-bubble-assistant-bg: #fff5d8;
+      --unity-panel-compose-bg: #ffffff;
+      --unity-panel-error: #8f1f2f;
+      --unity-transcript-border: #6f86a1;
+      --unity-transcript-bg: #f8fbff;
+      --unity-transcript-row-border: #93a5ba;
+      --unity-transcript-row-bg: #ffffff;
+      --unity-transcript-current-border: #0b5da8;
+      --unity-transcript-current-shadow: rgba(11, 93, 168, 0.32);
+      --unity-transcript-current-bg: #e7f0fb;
+      --unity-transcript-btn-bg: #ffffff;
+      --unity-transcript-btn-border: #6e839a;
+      --unity-transcript-btn-text: #1d344b;
+      --unity-transcript-text: #16283d;
+      --unity-focus-ring: #005fcc;
+      --unity-focus-ring-shadow: rgba(0, 95, 204, 0.28);
+      --unity-transcript-stripe: #8ea2b9;
+      --unity-transcript-current-stripe: #005fcc;
+      --unity-transcript-current-outline: rgba(0, 95, 204, 0.3);
     }
     #${PANEL_ID}[data-unity-floating="true"] {
       position: fixed;
@@ -199,8 +274,8 @@ function installStyles() {
       justify-content: space-between;
       gap: 10px;
       padding: 10px 12px;
-      border-bottom: 1px solid rgba(214, 190, 157, 0.7);
-      background: rgba(255, 252, 247, 0.82);
+      border-bottom: 1px solid var(--unity-panel-border);
+      background: var(--unity-panel-head-bg);
     }
     #${PANEL_ID} .unity-title {
       margin: 0;
@@ -211,16 +286,16 @@ function installStyles() {
     #${PANEL_ID} .unity-status {
       margin: 2px 0 0;
       font-size: 11px;
-      color: #6f6152;
+      color: var(--unity-panel-muted);
     }
     #${PANEL_ID} .unity-head-actions {
       display: flex;
       gap: 6px;
     }
     #${PANEL_ID} .unity-btn {
-      border: 1px solid rgba(196, 167, 130, 0.9);
-      background: #fffdf9;
-      color: #3b3026;
+      border: 1px solid var(--unity-panel-btn-border);
+      background: var(--unity-panel-btn-bg);
+      color: var(--unity-panel-btn-text);
       border-radius: 8px;
       padding: 6px 8px;
       font-size: 11px;
@@ -244,10 +319,17 @@ function installStyles() {
       animation: unity-spin 0.9s linear infinite;
     }
     #${PANEL_ID} .unity-btn:hover:not(:disabled) {
-      border-color: #b86a2e;
-      color: #b86a2e;
+      border-color: var(--unity-panel-btn-hover);
+      color: var(--unity-panel-btn-hover);
     }
     #${PANEL_ID} .unity-btn:disabled { opacity: 0.5; cursor: default; }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-btn:hover:not(:disabled),
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-source:hover:not(:disabled),
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-ts-btn:hover:not(:disabled) {
+      border-width: 2px;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
     @keyframes unity-spin {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
@@ -261,7 +343,7 @@ function installStyles() {
     #${PANEL_ID} .unity-note {
       margin: 0;
       font-size: 11px;
-      color: #6f6152;
+      color: var(--unity-panel-muted);
     }
     #${PANEL_ID} .unity-chat {
       max-height: 260px;
@@ -275,30 +357,40 @@ function installStyles() {
     #${PANEL_ID} .unity-transcript::-webkit-scrollbar { width: 8px; }
     #${PANEL_ID} .unity-chat::-webkit-scrollbar-thumb,
     #${PANEL_ID} .unity-transcript::-webkit-scrollbar-thumb {
-      background: rgba(190, 160, 126, 0.7);
+      background: var(--unity-panel-scroll-thumb);
       border-radius: 999px;
     }
     #${PANEL_ID} .unity-empty {
-      border: 1px dashed rgba(202, 177, 145, 0.8);
+      border: 1px dashed var(--unity-panel-empty-border);
       border-radius: 10px;
       padding: 10px;
-      color: #7a6b5b;
+      color: var(--unity-panel-empty-text);
       font-size: 12px;
       margin: 0;
     }
     #${PANEL_ID} .unity-bubble {
       border-radius: 10px;
-      border: 1px solid rgba(214, 190, 157, 0.8);
+      border: 1px solid var(--unity-panel-bubble-border);
       padding: 8px 9px;
       font-size: 12px;
       line-height: 1.42;
     }
     #${PANEL_ID} .unity-bubble--user {
-      background: #d8ecf7;
-      border-color: rgba(136, 181, 205, 0.95);
+      background: var(--unity-panel-bubble-user-bg);
+      border-color: var(--unity-panel-bubble-user-border);
     }
     #${PANEL_ID} .unity-bubble--assistant {
-      background: #fff4df;
+      background: var(--unity-panel-bubble-assistant-bg);
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-bubble--user,
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-bubble--assistant {
+      border-left: 4px solid;
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-bubble--user {
+      border-left-color: #0d4d8a;
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-bubble--assistant {
+      border-left-color: #8a6a00;
     }
     #${PANEL_ID} .unity-bubble-head {
       display: flex;
@@ -306,7 +398,7 @@ function installStyles() {
       justify-content: space-between;
       gap: 8px;
       font-size: 10px;
-      color: #6f6152;
+      color: var(--unity-panel-muted);
       text-transform: uppercase;
       letter-spacing: 0.06em;
       margin-bottom: 4px;
@@ -318,25 +410,30 @@ function installStyles() {
       margin-top: 7px;
     }
     #${PANEL_ID} .unity-source {
-      border: 1px solid rgba(196, 167, 130, 0.9);
+      border: 1px solid var(--unity-panel-btn-border);
       border-radius: 999px;
-      background: #fffdf9;
-      color: #3b3026;
+      background: var(--unity-panel-btn-bg);
+      color: var(--unity-panel-btn-text);
       padding: 3px 8px;
       font-size: 11px;
       cursor: pointer;
     }
     #${PANEL_ID} .unity-source:hover {
-      border-color: #b86a2e;
-      color: #b86a2e;
+      border-color: var(--unity-panel-btn-hover);
+      color: var(--unity-panel-btn-hover);
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-source {
+      border-width: 2px;
+      text-decoration: underline;
+      text-underline-offset: 2px;
     }
     #${PANEL_ID} .unity-compose textarea {
       width: 100%;
       min-height: 56px;
       border-radius: 10px;
-      border: 1px solid rgba(196, 167, 130, 0.9);
-      background: #fffefb;
-      color: #2b241d;
+      border: 1px solid var(--unity-panel-btn-border);
+      background: var(--unity-panel-compose-bg);
+      color: var(--unity-panel-text);
       font-size: 12px;
       line-height: 1.4;
       padding: 8px;
@@ -366,7 +463,17 @@ function installStyles() {
     #${PANEL_ID} .unity-error {
       margin: 0;
       font-size: 11px;
-      color: #b52f2f;
+      color: var(--unity-panel-error);
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-error {
+      border-left: 4px solid var(--unity-panel-error);
+      background: rgba(143, 31, 47, 0.09);
+      padding: 6px 8px;
+      border-radius: 8px;
+      font-weight: 600;
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-error::before {
+      content: "Error: ";
     }
     #${PANEL_ID} .unity-transcript-head {
       display: flex;
@@ -381,19 +488,19 @@ function installStyles() {
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.04em;
-      color: #3f3328;
+      color: var(--unity-panel-btn-text);
     }
     #${PANEL_ID} .unity-transcript-meta {
       margin: 0;
       font-size: 11px;
-      color: #7a6b5b;
+      color: var(--unity-panel-muted);
     }
     #${PANEL_ID} .unity-transcript {
       max-height: 220px;
       overflow: auto;
-      border: 1px solid rgba(214, 190, 157, 0.85);
+      border: 1px solid var(--unity-transcript-border);
       border-radius: 10px;
-      background: rgba(255, 253, 248, 0.9);
+      background: var(--unity-transcript-bg);
       padding: 6px;
       display: flex;
       flex-direction: column;
@@ -404,20 +511,29 @@ function installStyles() {
       grid-template-columns: auto 1fr;
       gap: 8px;
       align-items: start;
-      border: 1px solid rgba(214, 190, 157, 0.4);
+      border: 1px solid var(--unity-transcript-row-border);
       border-radius: 8px;
       padding: 6px;
-      background: #fff;
+      background: var(--unity-transcript-row-bg);
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-transcript-row {
+      border-left: 5px solid var(--unity-transcript-stripe);
+      padding-left: 8px;
     }
     #${PANEL_ID} .unity-transcript-row[data-current="true"] {
-      border-color: rgba(184, 106, 46, 0.95);
-      box-shadow: 0 0 0 1px rgba(184, 106, 46, 0.22);
-      background: #fff8ea;
+      border-color: var(--unity-transcript-current-border);
+      box-shadow: 0 0 0 1px var(--unity-transcript-current-shadow);
+      background: var(--unity-transcript-current-bg);
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-transcript-row[data-current="true"] {
+      border-left-color: var(--unity-transcript-current-stripe);
+      outline: 3px solid var(--unity-transcript-current-outline);
+      outline-offset: 1px;
     }
     #${PANEL_ID} .unity-ts-btn {
-      border: 1px solid rgba(196, 167, 130, 0.9);
-      background: #fffefb;
-      color: #3b3026;
+      border: 1px solid var(--unity-transcript-btn-border);
+      background: var(--unity-transcript-btn-bg);
+      color: var(--unity-transcript-btn-text);
       border-radius: 7px;
       font-size: 11px;
       font-weight: 600;
@@ -428,15 +544,26 @@ function installStyles() {
       text-align: center;
     }
     #${PANEL_ID} .unity-ts-btn:hover {
-      border-color: #b86a2e;
-      color: #b86a2e;
+      border-color: var(--unity-panel-btn-hover);
+      color: var(--unity-panel-btn-hover);
     }
     #${PANEL_ID} .unity-transcript-text {
       margin: 0;
       font-size: 12px;
       line-height: 1.4;
-      color: #3d3024;
+      color: var(--unity-transcript-text);
       cursor: pointer;
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-transcript-row[data-current="true"] .unity-transcript-text::before {
+      content: "Now: ";
+      font-weight: 700;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] :is(button, textarea):focus-visible {
+      outline: 3px solid var(--unity-focus-ring);
+      outline-offset: 2px;
+      box-shadow: 0 0 0 3px var(--unity-focus-ring-shadow);
     }
   `;
   document.documentElement.appendChild(style);
@@ -554,11 +681,17 @@ export default defineContentScript({
     let transcriptError: string | null = null;
     let activeTranscriptSegmentId: string | null = null;
     let watchedVideo: HTMLVideoElement | null = null;
+    let colorBlindModeEnabled = false;
 
     let composerFocused = false;
     let composerSelectionStart = 0;
     let composerSelectionEnd = 0;
     let lastRenderedFingerprint = '';
+
+    const applyColorBlindModeAttribute = () => {
+      if (!panelRoot) return;
+      panelRoot.setAttribute('data-color-blind-mode', String(colorBlindModeEnabled));
+    };
 
     const getDisplayTranscriptSegments = (): TranscriptSegment[] => {
       const reported = report?.transcript?.segments ?? [];
@@ -578,6 +711,7 @@ export default defineContentScript({
       dictationActive ? '1' : '0',
       localError ?? '',
       question,
+      colorBlindModeEnabled ? '1' : '0',
     ].join('|');
 
     const ensurePanelMounted = () => {
@@ -596,6 +730,7 @@ export default defineContentScript({
       if (!panelRoot || !panelRoot.isConnected) {
         panelRoot = createPanelRoot();
       }
+      applyColorBlindModeAttribute();
 
       const floatingMode = host === document.body;
       if (floatingMode) {
@@ -867,6 +1002,7 @@ export default defineContentScript({
 
     const render = () => {
       if (!panelRoot) return;
+      applyColorBlindModeAttribute();
 
       const nextFingerprint = viewFingerprint();
       if (panelRoot.childElementCount > 0 && nextFingerprint === lastRenderedFingerprint) {
@@ -1318,12 +1454,34 @@ export default defineContentScript({
       }
     };
 
+    const onStorageChanged = (
+      changes: Record<string, { newValue?: unknown }>,
+      areaName: string,
+    ) => {
+      if (areaName !== 'local') return;
+      if (!(COLOR_BLIND_MODE_STORAGE_KEY in changes)) return;
+      colorBlindModeEnabled = Boolean(changes[COLOR_BLIND_MODE_STORAGE_KEY]?.newValue);
+      applyColorBlindModeAttribute();
+      render();
+    };
+
     ext.runtime.onMessage.addListener(onMessage as any);
+    ext.storage.onChanged.addListener(onStorageChanged);
 
     initializeDictation();
     ensurePanelMounted();
     syncVideoListener();
     render();
+    void ext.storage.local
+      .get(COLOR_BLIND_MODE_STORAGE_KEY)
+      .then((stored) => {
+        colorBlindModeEnabled = Boolean(stored?.[COLOR_BLIND_MODE_STORAGE_KEY]);
+        applyColorBlindModeAttribute();
+        render();
+      })
+      .catch(() => {
+        // Ignore storage read errors.
+      });
     void loadEmbeddedState();
     void loadTranscript();
 
@@ -1403,6 +1561,7 @@ export default defineContentScript({
         watchedVideo.removeEventListener('seeked', onVideoTimelineUpdate);
       }
       ext.runtime.onMessage.removeListener(onMessage as any);
+      ext.storage.onChanged.removeListener(onStorageChanged);
     });
   },
 });

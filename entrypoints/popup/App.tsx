@@ -1,5 +1,25 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { LoaderCircle, Mic, MicOff, RotateCcw, Send, Settings, Trash2 } from 'lucide-react';
+import {
+  LoaderCircle,
+  Mic,
+  MicOff,
+  Pause,
+  Play,
+  RotateCcw,
+  Send,
+  Settings,
+  Square,
+  Trash2,
+  Volume2,
+} from 'lucide-react';
+import {
+  getAudioFollowModeEnabled,
+  getAudioRate,
+  getColorBlindModeEnabled,
+  setAudioFollowModeEnabled,
+  setAudioRate,
+  setColorBlindModeEnabled,
+} from '@/lib/storage';
 import type {
   ChatMessage,
   ChatSession,
@@ -27,6 +47,33 @@ type AskResponse = {
   ok: boolean;
   answer?: ChatMessage;
   session?: ChatSession;
+  error?: string;
+};
+type PopupTab = 'chat' | 'audio';
+type AudioTabMessage =
+  | { type: 'AUDIO_GET_STATE' }
+  | { type: 'AUDIO_GET_SELECTION' }
+  | { type: 'AUDIO_READ_SELECTION'; rate?: number; followMode?: boolean }
+  | { type: 'AUDIO_PLAY' }
+  | { type: 'AUDIO_PAUSE' }
+  | { type: 'AUDIO_STOP' }
+  | { type: 'AUDIO_SET_RATE'; rate: number }
+  | { type: 'AUDIO_SET_FOLLOW_MODE'; enabled: boolean };
+type AudioState = {
+  available: boolean;
+  hasSelection: boolean;
+  selectionText: string;
+  isSpeaking: boolean;
+  isPaused: boolean;
+  rate: number;
+  followMode: boolean;
+  currentLineIndex: number;
+  totalLines: number;
+  currentLineText: string;
+};
+type AudioResponse = {
+  ok: boolean;
+  state?: AudioState;
   error?: string;
 };
 
@@ -68,6 +115,19 @@ async function requestPopupMicrophoneAccess(): Promise<{ ok: boolean; error?: st
   }
 }
 
+const defaultAudioState: AudioState = {
+  available: true,
+  hasSelection: false,
+  selectionText: '',
+  isSpeaking: false,
+  isPaused: false,
+  rate: 1,
+  followMode: false,
+  currentLineIndex: -1,
+  totalLines: 0,
+  currentLineText: '',
+};
+
 async function sendMessage<T>(message: RuntimeRequest): Promise<T> {
   let lastError: unknown;
 
@@ -88,6 +148,27 @@ async function sendMessage<T>(message: RuntimeRequest): Promise<T> {
     throw lastError;
   }
   throw new Error('Background service is temporarily unavailable.');
+}
+
+async function sendTabMessage<T>(tabId: number, message: AudioTabMessage): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const response = (await ext.tabs.sendMessage(tabId, message)) as T | undefined;
+      if (typeof response !== 'undefined') {
+        return response;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 120 + attempt * 80));
+  }
+
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error('Unable to reach the page. Refresh the tab and try again.');
 }
 
 function formatTimestamp(iso?: string): string {
@@ -232,6 +313,12 @@ function App() {
   const [question, setQuestion] = useState('');
   const [isAsking, setIsAsking] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isColorBlindMode, setIsColorBlindMode] = useState(false);
+  const [activePane, setActivePane] = useState<PopupTab>('chat');
+  const [audioState, setAudioState] = useState<AudioState>(defaultAudioState);
+  const [audioRate, setAudioRateState] = useState(1);
+  const [audioFollowMode, setAudioFollowModeState] = useState(false);
+  const [isAudioLoading, setIsAudioLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dictationSupported, setDictationSupported] = useState(false);
   const [isDictating, setIsDictating] = useState(false);
@@ -283,7 +370,15 @@ function App() {
           (typeof localStorageState?.[LEGACY_API_KEY_STORAGE_KEY] === 'string' &&
             localStorageState[LEGACY_API_KEY_STORAGE_KEY].trim().length > 0);
 
+        const [nextColorBlindMode, nextAudioRate, nextAudioFollow] = await Promise.all([
+          getColorBlindModeEnabled(),
+          getAudioRate(),
+          getAudioFollowModeEnabled(),
+        ]);
         setHasApiKey(storageHasKey || Boolean(settings.hasApiKey));
+        setIsColorBlindMode(nextColorBlindMode);
+        setAudioRateState(nextAudioRate);
+        setAudioFollowModeState(nextAudioFollow);
 
         if (tabId != null) {
           await refreshTabData(tabId);
@@ -590,113 +685,371 @@ function App() {
     }
   }, [activeTabId]);
 
+  const refreshAudioState = useCallback(async (tabId?: number | null) => {
+    const resolvedTabId = tabId ?? activeTabId;
+    if (resolvedTabId == null) return;
+    try {
+      const response = await sendTabMessage<AudioResponse>(resolvedTabId, { type: 'AUDIO_GET_STATE' });
+      if (response?.state) {
+        setAudioState(response.state);
+        setAudioRateState(response.state.rate);
+        setAudioFollowModeState(response.state.followMode);
+      }
+      if (response && !response.ok && response.error) {
+        setError(response.error);
+      }
+    } catch (audioError) {
+      setAudioState((previous) => ({ ...previous, available: false }));
+      setError(audioError instanceof Error ? audioError.message : 'Audio controls are unavailable on this tab.');
+    }
+  }, [activeTabId]);
+
+  const runAudioCommand = useCallback(async (command: AudioTabMessage) => {
+    if (activeTabId == null) {
+      setError('Open an HTTP(S) tab to use Audio.');
+      return;
+    }
+    setError(null);
+    setIsAudioLoading(true);
+    try {
+      const response = await sendTabMessage<AudioResponse>(activeTabId, command);
+      if (!response.ok) {
+        throw new Error(response.error || 'Audio action failed.');
+      }
+      if (response.state) {
+        setAudioState(response.state);
+        setAudioRateState(response.state.rate);
+        setAudioFollowModeState(response.state.followMode);
+      } else {
+        await refreshAudioState(activeTabId);
+      }
+    } catch (audioError) {
+      setError(audioError instanceof Error ? audioError.message : 'Audio action failed.');
+    } finally {
+      setIsAudioLoading(false);
+    }
+  }, [activeTabId, refreshAudioState]);
+
   const messages = useMemo(() => session?.messages ?? [], [session?.messages]);
   const isRunning = runningStates.has(status.state);
   const hasContext = report != null;
   const isComposerDisabled = !hasApiKey || activeTabId == null || isAsking;
+  const modeSwitchId = 'unity-color-blind-mode-switch';
+
+  const toggleColorBlindMode = useCallback(async () => {
+    const next = !isColorBlindMode;
+    setIsColorBlindMode(next);
+    try {
+      await setColorBlindModeEnabled(next);
+    } catch (saveError) {
+      setIsColorBlindMode(!next);
+      setError(saveError instanceof Error ? saveError.message : 'Failed to update accessibility mode.');
+    }
+  }, [isColorBlindMode]);
+
+  const onAudioRateChange = useCallback(async (value: number) => {
+    const clamped = Math.max(0.75, Math.min(2, Number(value.toFixed(2))));
+    setAudioRateState(clamped);
+    try {
+      await setAudioRate(clamped);
+      if (activeTabId != null) {
+        await runAudioCommand({ type: 'AUDIO_SET_RATE', rate: clamped });
+      }
+    } catch (audioError) {
+      setError(audioError instanceof Error ? audioError.message : 'Failed to set playback speed.');
+    }
+  }, [activeTabId, runAudioCommand]);
+
+  const toggleAudioFollowMode = useCallback(async () => {
+    const next = !audioFollowMode;
+    setAudioFollowModeState(next);
+    try {
+      await setAudioFollowModeEnabled(next);
+      if (activeTabId != null) {
+        await runAudioCommand({ type: 'AUDIO_SET_FOLLOW_MODE', enabled: next });
+      }
+    } catch (audioError) {
+      setAudioFollowModeState(!next);
+      setError(audioError instanceof Error ? audioError.message : 'Failed to update Follow Mode.');
+    }
+  }, [activeTabId, audioFollowMode, runAudioCommand]);
+
+  useEffect(() => {
+    if (activeTabId == null || activePane !== 'audio') return;
+    void refreshAudioState(activeTabId);
+
+    const timer = window.setInterval(() => {
+      void refreshAudioState(activeTabId);
+    }, 900);
+
+    return () => window.clearInterval(timer);
+  }, [activePane, activeTabId, refreshAudioState]);
+
+  const canUseAudio = activeTabId != null;
+  const audioLineLabel =
+    audioState.currentLineIndex >= 0 && audioState.totalLines > 0
+      ? `Line ${audioState.currentLineIndex + 1} of ${audioState.totalLines}`
+      : 'No active transcript line';
 
   return (
-    <div className="unity-shell">
+    <div className={`unity-shell ${isColorBlindMode ? 'unity-shell--cbm' : ''}`.trim()}>
+      <section className="mode-row">
+        <div className="mode-label">
+          <span className="mode-label-title">Color Blind Mode</span>
+          <span className="mode-label-hint">Adds non-color cues for status and highlights.</span>
+        </div>
+        <button
+          id={modeSwitchId}
+          type="button"
+          className="mode-switch"
+          role="switch"
+          aria-checked={isColorBlindMode}
+          onClick={() => void toggleColorBlindMode()}
+          title="Toggle Color Blind Mode"
+        >
+          <span className="mode-switch-track" aria-hidden="true">
+            <span className="mode-switch-knob" />
+          </span>
+          <span className="mode-switch-text">{isColorBlindMode ? 'On' : 'Off'}</span>
+        </button>
+      </section>
       <header className="unity-header">
         <div>
           <p className="kicker">Unity</p>
-          <h1>Grounded Tab Chat</h1>
+          <h1>{activePane === 'chat' ? 'Grounded Tab Chat' : 'Audio Reader'}</h1>
         </div>
         <div className="header-actions">
-          <button type="button" className="icon-btn" onClick={() => void startScan()} disabled={isRunning || activeTabId == null}>
-            <RotateCcw size={14} className={isRunning ? 'spin' : ''} />
-          </button>
+          {activePane === 'chat' ? (
+            <button type="button" className="icon-btn" onClick={() => void startScan()} disabled={isRunning || activeTabId == null}>
+              <RotateCcw size={14} className={isRunning ? 'spin' : ''} />
+            </button>
+          ) : (
+            <button type="button" className="icon-btn" onClick={() => void refreshAudioState()} disabled={!canUseAudio}>
+              <RotateCcw size={14} className={isAudioLoading ? 'spin' : ''} />
+            </button>
+          )}
           <button type="button" className="icon-btn" onClick={() => setIsSettingsOpen(true)}>
             <Settings size={14} />
           </button>
         </div>
       </header>
 
-      <section className="status-row">
-        <span className={`pill pill--${status.state}`}>{status.state}</span>
-        <p>{status.message}</p>
+      <section className="panel-tabs" role="tablist" aria-label="Extension tools">
+        <button
+          type="button"
+          className={`panel-tab ${activePane === 'chat' ? 'panel-tab--active' : ''}`.trim()}
+          role="tab"
+          aria-selected={activePane === 'chat'}
+          onClick={() => setActivePane('chat')}
+        >
+          Chat
+        </button>
+        <button
+          type="button"
+          className={`panel-tab ${activePane === 'audio' ? 'panel-tab--active' : ''}`.trim()}
+          role="tab"
+          aria-selected={activePane === 'audio'}
+          onClick={() => setActivePane('audio')}
+        >
+          Audio
+        </button>
       </section>
 
-      {!hasApiKey && (
-        <section className="warning-card">
-          <p>Add your OpenRouter API key in settings before asking questions.</p>
-        </section>
-      )}
+      {activePane === 'chat' ? (
+        <>
+          <section className="status-row">
+            <span className={`pill pill--${status.state}`}>{status.state}</span>
+            <p>{status.message}</p>
+          </section>
 
-      {!hasContext && (
-        <section className="empty-card">
-          <p>Run a scan to prepare this tab for grounded Q&A.</p>
-          <button type="button" className="primary-btn" onClick={() => void startScan()} disabled={activeTabId == null || isRunning}>
-            {isRunning ? <LoaderCircle size={14} className="spin" /> : 'Scan Tab'}
-          </button>
-        </section>
-      )}
+          {!hasApiKey && (
+            <section className="warning-card">
+              <p>Add your OpenRouter API key in settings before asking questions.</p>
+            </section>
+          )}
 
-      <section className="chat-feed" data-testid="chat-feed">
-        {messages.length === 0 ? (
-          <div className="empty-chat">
-            <p>Ask about the current tab. Answers are grounded only in page/video context.</p>
-          </div>
-        ) : (
-          messages.map((message) => (
-            <MessageBubble key={message.id} message={message} onJump={jumpToSource} />
-          ))
-        )}
-      </section>
+          {!hasContext && (
+            <section className="empty-card">
+              <p>Run a scan to prepare this tab for grounded Q&A.</p>
+              <button type="button" className="primary-btn" onClick={() => void startScan()} disabled={activeTabId == null || isRunning}>
+                {isRunning ? <LoaderCircle size={14} className="spin" /> : 'Scan Tab'}
+              </button>
+            </section>
+          )}
 
-      <form className="composer" onSubmit={askQuestion}>
-        <textarea
-          ref={textareaRef}
-          value={question}
-          onChange={(event) => setQuestion(event.target.value)}
-          placeholder="Ask a question about this tab..."
-          disabled={isComposerDisabled}
-          rows={3}
-        />
-        <div className="composer-actions">
-          <button
-            type="button"
-            className="ghost-btn"
-            onClick={() => void clearChat()}
-            disabled={activeTabId == null || messages.length === 0}
-          >
-            <Trash2 size={14} />
-            Clear
-          </button>
-          <div className="composer-submit-actions">
+          <section className="chat-feed" data-testid="chat-feed">
+            {messages.length === 0 ? (
+              <div className="empty-chat">
+                <p>Ask about the current tab. Answers are grounded only in page/video context.</p>
+              </div>
+            ) : (
+              messages.map((message) => (
+                <MessageBubble key={message.id} message={message} onJump={jumpToSource} />
+              ))
+            )}
+          </section>
+
+          <form className="composer" onSubmit={askQuestion}>
+            <textarea
+              ref={textareaRef}
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              placeholder="Ask a question about this tab..."
+              disabled={isComposerDisabled}
+              rows={3}
+            />
+            <div className="composer-actions">
+              <button
+                type="button"
+                className="ghost-btn"
+                onClick={() => void clearChat()}
+                disabled={activeTabId == null || messages.length === 0}
+              >
+                <Trash2 size={14} />
+                Clear
+              </button>
+              <div className="composer-submit-actions">
+                <button
+                  type="button"
+                  className={`icon-btn voice-btn ${isDictating ? 'voice-btn--active' : ''}`}
+                  onClick={() => void toggleDictation()}
+                  disabled={isComposerDisabled || !dictationSupported || isRequestingMic}
+                  title={
+                    !dictationSupported
+                      ? 'Voice dictation is unavailable in this browser.'
+                      : isDictating
+                        ? 'Stop voice dictation'
+                        : 'Start voice dictation'
+                  }
+                  aria-label={
+                    !dictationSupported
+                      ? 'Voice dictation unavailable'
+                      : isDictating
+                        ? 'Stop voice dictation'
+                        : 'Start voice dictation'
+                  }
+                >
+                  {isDictating ? <MicOff size={14} /> : <Mic size={14} />}
+                </button>
+                <button
+                  type="submit"
+                  className="primary-btn"
+                  disabled={isComposerDisabled || !question.trim()}
+                >
+                  {isAsking ? <LoaderCircle size={14} className="spin" /> : <Send size={14} />}
+                  Ask
+                </button>
+              </div>
+            </div>
+          </form>
+        </>
+      ) : (
+        <section className="audio-pane">
+          <div className="audio-read-row">
             <button
               type="button"
-              className={`icon-btn voice-btn ${isDictating ? 'voice-btn--active' : ''}`}
-              onClick={() => void toggleDictation()}
-              disabled={isComposerDisabled || !dictationSupported || isRequestingMic}
-              title={
-                !dictationSupported
-                  ? 'Voice dictation is unavailable in this browser.'
-                  : isDictating
-                    ? 'Stop voice dictation'
-                    : 'Start voice dictation'
-              }
-              aria-label={
-                !dictationSupported
-                  ? 'Voice dictation unavailable'
-                  : isDictating
-                    ? 'Stop voice dictation'
-                    : 'Start voice dictation'
-              }
+              className="primary-btn"
+              onClick={() => void runAudioCommand({ type: 'AUDIO_READ_SELECTION', rate: audioRate, followMode: audioFollowMode })}
+              disabled={!canUseAudio || isAudioLoading}
             >
-              {isDictating ? <MicOff size={14} /> : <Mic size={14} />}
+              <Volume2 size={14} />
+              Read Selection
             </button>
             <button
-              type="submit"
-              className="primary-btn"
-              disabled={isComposerDisabled || !question.trim()}
+              type="button"
+              className="ghost-btn"
+              onClick={() => void refreshAudioState()}
+              disabled={!canUseAudio || isAudioLoading}
             >
-              {isAsking ? <LoaderCircle size={14} className="spin" /> : <Send size={14} />}
-              Ask
+              <RotateCcw size={14} />
+              Refresh
             </button>
           </div>
-        </div>
-      </form>
+
+          <div className="audio-controls">
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={() => void runAudioCommand({ type: 'AUDIO_PLAY' })}
+              disabled={!canUseAudio || isAudioLoading}
+            >
+              <Play size={14} />
+              Play
+            </button>
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={() => void runAudioCommand({ type: 'AUDIO_PAUSE' })}
+              disabled={!canUseAudio || isAudioLoading || !audioState.isSpeaking || audioState.isPaused}
+            >
+              <Pause size={14} />
+              Pause
+            </button>
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={() => void runAudioCommand({ type: 'AUDIO_STOP' })}
+              disabled={!canUseAudio || isAudioLoading || (!audioState.isSpeaking && !audioState.isPaused)}
+            >
+              <Square size={14} />
+              Stop
+            </button>
+          </div>
+
+          <div className="audio-slider-row">
+            <label htmlFor="audio-rate" className="audio-slider-label">Speed</label>
+            <input
+              id="audio-rate"
+              type="range"
+              min={0.75}
+              max={2}
+              step={0.05}
+              value={audioRate}
+              onChange={(event) => {
+                void onAudioRateChange(Number(event.target.value));
+              }}
+              disabled={!canUseAudio}
+            />
+            <span className="audio-rate-value">{audioRate.toFixed(2)}x</span>
+          </div>
+
+          <div className="audio-follow-row">
+            <label htmlFor="audio-follow-toggle" className="audio-follow-label">
+              <span>Follow Mode</span>
+              <small>Auto-scroll and center the current spoken line.</small>
+            </label>
+            <button
+              id="audio-follow-toggle"
+              type="button"
+              className="mode-switch"
+              role="switch"
+              aria-checked={audioFollowMode}
+              onClick={() => void toggleAudioFollowMode()}
+              disabled={!canUseAudio}
+            >
+              <span className="mode-switch-track" aria-hidden="true">
+                <span className="mode-switch-knob" />
+              </span>
+              <span className="mode-switch-text">{audioFollowMode ? 'On' : 'Off'}</span>
+            </button>
+          </div>
+
+          <div className="audio-status-card">
+            <p className="audio-status-line"><strong>Status:</strong> {audioState.isPaused ? 'Paused' : audioState.isSpeaking ? 'Speaking' : 'Idle'}</p>
+            <p className="audio-status-line"><strong>{audioLineLabel}</strong></p>
+            {audioState.currentLineText && <p className="audio-current-line">{audioState.currentLineText}</p>}
+          </div>
+
+          <div className="audio-selection-card">
+            <p className="audio-selection-title">Current page selection</p>
+            <p className="audio-selection-text">
+              {audioState.hasSelection
+                ? audioState.selectionText
+                : 'Highlight text on the webpage, then tap "Read Selection".'}
+            </p>
+          </div>
+        </section>
+      )}
 
       {error && <p className="error-text">{error}</p>}
       {activeTabUrl && <p className="tab-url">{activeTabUrl}</p>}
