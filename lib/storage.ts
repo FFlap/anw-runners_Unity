@@ -1,4 +1,4 @@
-import type { ChatSession, ScanReport, TabContext } from '@/lib/types';
+import type { AutofillProfile, ChatSession, ScanReport, TabContext } from '@/lib/types';
 
 const API_KEY_STORAGE_KEY = 'openrouter_api_key';
 const LEGACY_API_KEY_STORAGE_KEY = 'gemini_api_key';
@@ -6,6 +6,7 @@ export const COLOR_BLIND_MODE_STORAGE_KEY = 'unity_color_blind_mode';
 export const AUDIO_RATE_STORAGE_KEY = 'unity_audio_rate';
 export const AUDIO_FOLLOW_MODE_STORAGE_KEY = 'unity_audio_follow_mode';
 export const FORCED_FONT_STORAGE_KEY = 'unity_forced_font';
+export const AUTOFILL_PROFILE_STORAGE_KEY = 'unity_autofill_profile';
 
 export type ForcedFontOption =
   | 'none'
@@ -29,6 +30,48 @@ const CONTEXT_PREFIX = 'scan_context_';
 const SESSION_PREFIX = 'chat_session_';
 
 const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeof browser;
+
+export function createEmptyAutofillProfile(): AutofillProfile {
+  return {
+    fullName: '',
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    addressLine1: '',
+    addressLine2: '',
+    city: '',
+    stateOrProvince: '',
+    postalOrZip: '',
+    country: '',
+  };
+}
+
+function normalizeAutofillField(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeAutofillProfile(value: unknown): AutofillProfile {
+  const emptyProfile = createEmptyAutofillProfile();
+  if (!value || typeof value !== 'object') {
+    return emptyProfile;
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    fullName: normalizeAutofillField(record.fullName),
+    firstName: normalizeAutofillField(record.firstName),
+    lastName: normalizeAutofillField(record.lastName),
+    email: normalizeAutofillField(record.email),
+    phone: normalizeAutofillField(record.phone),
+    addressLine1: normalizeAutofillField(record.addressLine1),
+    addressLine2: normalizeAutofillField(record.addressLine2),
+    city: normalizeAutofillField(record.city),
+    stateOrProvince: normalizeAutofillField(record.stateOrProvince),
+    postalOrZip: normalizeAutofillField(record.postalOrZip),
+    country: normalizeAutofillField(record.country),
+  };
+}
 
 export async function saveApiKey(apiKey: string): Promise<void> {
   const trimmed = apiKey.trim();
@@ -100,6 +143,21 @@ export async function getForcedFont(): Promise<ForcedFontOption> {
 
 export async function setForcedFont(font: ForcedFontOption): Promise<void> {
   await ext.storage.local.set({ [FORCED_FONT_STORAGE_KEY]: normalizeForcedFont(font) });
+}
+
+export async function getAutofillProfile(): Promise<AutofillProfile> {
+  const stored = await ext.storage.local.get(AUTOFILL_PROFILE_STORAGE_KEY);
+  return normalizeAutofillProfile(stored?.[AUTOFILL_PROFILE_STORAGE_KEY]);
+}
+
+export async function saveAutofillProfile(profile: AutofillProfile): Promise<void> {
+  await ext.storage.local.set({
+    [AUTOFILL_PROFILE_STORAGE_KEY]: normalizeAutofillProfile(profile),
+  });
+}
+
+export async function clearAutofillProfile(): Promise<void> {
+  await ext.storage.local.remove(AUTOFILL_PROFILE_STORAGE_KEY);
 }
 
 function reportKey(tabId: number): string {

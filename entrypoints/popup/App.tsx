@@ -13,10 +13,14 @@ import {
   Volume2,
 } from 'lucide-react';
 import {
+  clearAutofillProfile,
+  createEmptyAutofillProfile,
+  getAutofillProfile,
   getAudioFollowModeEnabled,
   getAudioRate,
   getColorBlindModeEnabled,
   getForcedFont,
+  saveAutofillProfile,
   setAudioFollowModeEnabled,
   setAudioRate,
   setColorBlindModeEnabled,
@@ -24,8 +28,11 @@ import {
   type ForcedFontOption,
 } from '@/lib/storage';
 import type {
+  AutofillFieldKey,
+  AutofillProfile,
   ChatMessage,
   ChatSession,
+  DetectedFormField,
   RuntimeRequest,
   ScanStatus,
   SourceSnippet,
@@ -52,7 +59,11 @@ type AskResponse = {
   session?: ChatSession;
   error?: string;
 };
-type PopupTab = 'chat' | 'audio';
+type PopupTab = 'chat' | 'audio' | 'profile' | 'autofill';
+type ToastState = {
+  tone: 'success' | 'error';
+  text: string;
+};
 type AudioTabMessage =
   | { type: 'AUDIO_GET_STATE' }
   | { type: 'AUDIO_GET_SELECTION' }
@@ -62,6 +73,17 @@ type AudioTabMessage =
   | { type: 'AUDIO_STOP' }
   | { type: 'AUDIO_SET_RATE'; rate: number }
   | { type: 'AUDIO_SET_FOLLOW_MODE'; enabled: boolean };
+type FormFillSelection = {
+  index: number;
+  fieldKey: AutofillFieldKey;
+  value: string;
+};
+type FormTabMessage =
+  | { type: 'FORM_SCAN_FIELDS' }
+  | { type: 'FORM_FILL_FIELDS'; selections: FormFillSelection[] }
+  | { type: 'FORM_UNDO_FILL' }
+  | { type: 'FORM_GET_UNDO_STATUS' };
+type ContentTabMessage = AudioTabMessage | FormTabMessage;
 type AudioState = {
   available: boolean;
   hasSelection: boolean;
@@ -77,6 +99,40 @@ type AudioState = {
 type AudioResponse = {
   ok: boolean;
   state?: AudioState;
+  error?: string;
+};
+type FormScanResponse = {
+  ok: boolean;
+  fields?: DetectedFormField[];
+  error?: string;
+};
+type FormFillSummary = {
+  requested: number;
+  filled: number;
+  skipped: number;
+  skippedByReason: Record<string, number>;
+};
+type FormUndoSummary = {
+  undoable: number;
+  restored: number;
+  skipped: number;
+  skippedByReason: Record<string, number>;
+};
+type FormFillResponse = {
+  ok: boolean;
+  summary?: FormFillSummary;
+  undoAvailable?: boolean;
+  error?: string;
+};
+type FormUndoResponse = {
+  ok: boolean;
+  summary?: FormUndoSummary;
+  undoAvailable?: boolean;
+  error?: string;
+};
+type FormUndoStatusResponse = {
+  ok: boolean;
+  undoAvailable?: boolean;
   error?: string;
 };
 
@@ -129,6 +185,111 @@ const defaultAudioState: AudioState = {
   currentLineText: '',
 };
 
+const paneTitleByTab: Record<PopupTab, string> = {
+  chat: 'Grounded Tab Chat',
+  audio: 'Audio Reader',
+  profile: 'Profile',
+  autofill: 'Autofill Preview',
+};
+
+const profileFieldConfigs: Array<{
+  key: keyof AutofillProfile;
+  label: string;
+  type?: string;
+  autoComplete?: string;
+}> = [
+  { key: 'fullName', label: 'Full Name', autoComplete: 'name' },
+  { key: 'firstName', label: 'First Name', autoComplete: 'given-name' },
+  { key: 'lastName', label: 'Last Name', autoComplete: 'family-name' },
+  { key: 'email', label: 'Email', type: 'email', autoComplete: 'email' },
+  { key: 'phone', label: 'Phone', type: 'tel', autoComplete: 'tel' },
+  { key: 'addressLine1', label: 'Address Line 1', autoComplete: 'address-line1' },
+  { key: 'addressLine2', label: 'Address Line 2', autoComplete: 'address-line2' },
+  { key: 'city', label: 'City', autoComplete: 'address-level2' },
+  { key: 'stateOrProvince', label: 'Province/State', autoComplete: 'address-level1' },
+  { key: 'postalOrZip', label: 'Postal/ZIP', autoComplete: 'postal-code' },
+  { key: 'country', label: 'Country', autoComplete: 'country-name' },
+];
+
+function getProfileValueForFieldKey(
+  profile: AutofillProfile,
+  fieldKey: AutofillFieldKey | null,
+): string {
+  if (!fieldKey) return '';
+  switch (fieldKey) {
+    case 'email':
+      return profile.email;
+    case 'firstName':
+      return profile.firstName;
+    case 'lastName':
+      return profile.lastName;
+    case 'fullName':
+      return profile.fullName;
+    case 'phone':
+      return profile.phone;
+    case 'addressLine1':
+      return profile.addressLine1;
+    case 'addressLine2':
+      return profile.addressLine2;
+    case 'city':
+      return profile.city;
+    case 'stateProvince':
+      return profile.stateOrProvince;
+    case 'postalZip':
+      return profile.postalOrZip;
+    case 'country':
+      return profile.country;
+    default:
+      return '';
+  }
+}
+
+function getDetectedFieldLabel(field: DetectedFormField): string {
+  const primaryLabel = field.labelText
+    .split('|')
+    .map((part) => part.trim())
+    .find((part) => part.length > 0);
+  if (primaryLabel) return primaryLabel;
+  if (field.placeholder) return field.placeholder;
+  if (field.name) return field.name;
+  if (field.id) return field.id;
+  return `${field.elementType} field ${field.index + 1}`;
+}
+
+function getFieldKeyLabel(fieldKey: AutofillFieldKey | null): string {
+  if (!fieldKey) return 'unclassified';
+  switch (fieldKey) {
+    case 'email':
+      return 'email';
+    case 'firstName':
+      return 'firstName';
+    case 'lastName':
+      return 'lastName';
+    case 'fullName':
+      return 'fullName';
+    case 'phone':
+      return 'phone';
+    case 'addressLine1':
+      return 'addressLine1';
+    case 'addressLine2':
+      return 'addressLine2';
+    case 'city':
+      return 'city';
+    case 'stateProvince':
+      return 'stateProvince';
+    case 'postalZip':
+      return 'postalZip';
+    case 'country':
+      return 'country';
+    default:
+      return 'unclassified';
+  }
+}
+
+function formatSkipReason(reason: string): string {
+  return reason.replace(/_/g, ' ').trim();
+}
+
 async function sendMessage<T>(message: RuntimeRequest): Promise<T> {
   let lastError: unknown;
 
@@ -151,7 +312,7 @@ async function sendMessage<T>(message: RuntimeRequest): Promise<T> {
   throw new Error('Background service is temporarily unavailable.');
 }
 
-async function sendTabMessage<T>(tabId: number, message: AudioTabMessage): Promise<T> {
+async function sendTabMessage<T>(tabId: number, message: ContentTabMessage): Promise<T> {
   let lastError: unknown;
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -378,12 +539,27 @@ function App() {
   const [dictationSupported, setDictationSupported] = useState(false);
   const [isDictating, setIsDictating] = useState(false);
   const [isRequestingMic, setIsRequestingMic] = useState(false);
+  const [profileForm, setProfileForm] = useState<AutofillProfile>(() => createEmptyAutofillProfile());
+  const [savedProfile, setSavedProfile] = useState<AutofillProfile>(() => createEmptyAutofillProfile());
+  const [isProfileLoading, setIsProfileLoading] = useState(false);
+  const [isProfileSaving, setIsProfileSaving] = useState(false);
+  const [detectedFormFields, setDetectedFormFields] = useState<DetectedFormField[]>([]);
+  const [autofillEnabledByField, setAutofillEnabledByField] = useState<Record<number, boolean>>({});
+  const [isFieldScanLoading, setIsFieldScanLoading] = useState(false);
+  const [isFillNowLoading, setIsFillNowLoading] = useState(false);
+  const [isUndoLoading, setIsUndoLoading] = useState(false);
+  const [undoAvailable, setUndoAvailable] = useState(false);
+  const [fillSummary, setFillSummary] = useState<FormFillSummary | null>(null);
+  const [undoSummary, setUndoSummary] = useState<FormUndoSummary | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
 
   const recognitionRef = useRef<DictationRecognitionLike | null>(null);
   const dictationActiveRef = useRef(false);
   const silenceTimerRef = useRef<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const pendingCursorRef = useRef<number | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+  const hasLoadedProfileRef = useRef(false);
 
   const refreshTabData = useCallback(async (tabId: number) => {
     const [nextStatus, sessionResponse] = await Promise.all([
@@ -393,6 +569,17 @@ function App() {
 
     setStatus(nextStatus);
     setSession(sessionResponse.session);
+  }, []);
+
+  const showToast = useCallback((tone: ToastState['tone'], text: string) => {
+    if (toastTimerRef.current != null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    setToast({ tone, text });
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 2400);
   }, []);
 
   useEffect(() => {
@@ -451,6 +638,14 @@ function App() {
   }, [refreshTabData]);
 
   useEffect(() => {
+    return () => {
+      if (toastTimerRef.current != null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (activeTabId == null) return;
 
     const timer = window.setInterval(() => {
@@ -461,6 +656,14 @@ function App() {
 
     return () => window.clearInterval(timer);
   }, [activeTabId, refreshTabData]);
+
+  useEffect(() => {
+    setDetectedFormFields([]);
+    setAutofillEnabledByField({});
+    setUndoAvailable(false);
+    setFillSummary(null);
+    setUndoSummary(null);
+  }, [activeTabId]);
 
   useEffect(() => {
     const RecognitionCtor = getDictationRecognitionCtor();
@@ -774,6 +977,133 @@ function App() {
     }
   }, [activeTabId, refreshAudioState]);
 
+  const loadProfileData = useCallback(async () => {
+    setIsProfileLoading(true);
+    try {
+      const persistedProfile = await getAutofillProfile();
+      setSavedProfile(persistedProfile);
+      setProfileForm(persistedProfile);
+      hasLoadedProfileRef.current = true;
+    } catch (profileError) {
+      const message = profileError instanceof Error ? profileError.message : 'Failed to load saved profile.';
+      setError(message);
+      showToast('error', 'Failed to load profile.');
+    } finally {
+      setIsProfileLoading(false);
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    if ((activePane !== 'profile' && activePane !== 'autofill') || hasLoadedProfileRef.current) return;
+    void loadProfileData();
+  }, [activePane, loadProfileData]);
+
+  const updateProfileField = useCallback((field: keyof AutofillProfile, value: string) => {
+    setProfileForm((previous) => ({
+      ...previous,
+      [field]: value,
+    }));
+  }, []);
+
+  const saveProfileData = useCallback(async () => {
+    setError(null);
+    setIsProfileSaving(true);
+    try {
+      await saveAutofillProfile(profileForm);
+      const persistedProfile = await getAutofillProfile();
+      setSavedProfile(persistedProfile);
+      setProfileForm(persistedProfile);
+      hasLoadedProfileRef.current = true;
+      showToast('success', 'Profile saved.');
+    } catch (profileError) {
+      const message = profileError instanceof Error ? profileError.message : 'Failed to save profile.';
+      setError(message);
+      showToast('error', 'Failed to save profile.');
+    } finally {
+      setIsProfileSaving(false);
+    }
+  }, [profileForm, showToast]);
+
+  const clearProfileData = useCallback(async () => {
+    setError(null);
+    setIsProfileSaving(true);
+    try {
+      await clearAutofillProfile();
+      const clearedProfile = createEmptyAutofillProfile();
+      setSavedProfile(clearedProfile);
+      setProfileForm(clearedProfile);
+      hasLoadedProfileRef.current = true;
+      showToast('success', 'Profile cleared.');
+    } catch (profileError) {
+      const message = profileError instanceof Error ? profileError.message : 'Failed to clear profile.';
+      setError(message);
+      showToast('error', 'Failed to clear profile.');
+    } finally {
+      setIsProfileSaving(false);
+    }
+  }, [showToast]);
+
+  const scanFormFields = useCallback(async () => {
+    if (activeTabId == null) {
+      setError('Open an HTTP(S) tab to scan fillable fields.');
+      showToast('error', 'No active tab available for field scan.');
+      return;
+    }
+
+    setError(null);
+    setFillSummary(null);
+    setIsFieldScanLoading(true);
+    try {
+      const response = await sendTabMessage<FormScanResponse>(activeTabId, { type: 'FORM_SCAN_FIELDS' });
+      if (!response.ok) {
+        throw new Error(response.error || 'Failed to scan form fields.');
+      }
+      const fields = Array.isArray(response.fields) ? response.fields : [];
+      const classifiedCount = fields.filter((field) => field.fieldKey != null).length;
+      const nextEnabledByField = fields.reduce<Record<number, boolean>>((accumulator, field) => {
+        const profileValue = getProfileValueForFieldKey(savedProfile, field.fieldKey);
+        accumulator[field.index] = Boolean(field.fieldKey && profileValue.trim().length > 0);
+        return accumulator;
+      }, {});
+      setDetectedFormFields(fields);
+      setAutofillEnabledByField(nextEnabledByField);
+      showToast('success', `Detected ${fields.length} fields (${classifiedCount} classified).`);
+    } catch (scanError) {
+      const message = scanError instanceof Error ? scanError.message : 'Field scan failed.';
+      setError(message);
+      showToast('error', 'Failed to scan fields on this page.');
+    } finally {
+      setIsFieldScanLoading(false);
+    }
+  }, [activeTabId, savedProfile, showToast]);
+
+  const refreshUndoAvailability = useCallback(async (tabId?: number | null) => {
+    const resolvedTabId = tabId ?? activeTabId;
+    if (resolvedTabId == null) {
+      setUndoAvailable(false);
+      return;
+    }
+
+    try {
+      const response = await sendTabMessage<FormUndoStatusResponse>(resolvedTabId, { type: 'FORM_GET_UNDO_STATUS' });
+      setUndoAvailable(Boolean(response.ok && response.undoAvailable));
+    } catch {
+      setUndoAvailable(false);
+    }
+  }, [activeTabId]);
+
+  useEffect(() => {
+    if (activePane !== 'autofill') return;
+    void refreshUndoAvailability();
+  }, [activePane, activeTabId, refreshUndoAvailability]);
+
+  const toggleAutofillField = useCallback((fieldIndex: number, enabled: boolean) => {
+    setAutofillEnabledByField((previous) => ({
+      ...previous,
+      [fieldIndex]: enabled,
+    }));
+  }, []);
+
   const messages = useMemo(() => session?.messages ?? [], [session?.messages]);
   const isComposerDisabled = !hasApiKey || activeTabId == null || isAsking;
   const statusMessage =
@@ -840,6 +1170,99 @@ function App() {
   }, [activePane, activeTabId, refreshAudioState]);
 
   const canUseAudio = activeTabId != null;
+  const classifiedFieldCount = detectedFormFields.filter((field) => field.fieldKey != null).length;
+  const autofillPreviewRows = useMemo(() => {
+    return detectedFormFields.map((field) => {
+      const profileValue = getProfileValueForFieldKey(savedProfile, field.fieldKey);
+      const hasMissingValue = field.fieldKey != null && profileValue.trim().length === 0;
+      const isUnsupported = field.fieldKey == null;
+      const rowDisabled = hasMissingValue || isUnsupported;
+      const rowEnabled = !rowDisabled && Boolean(autofillEnabledByField[field.index]);
+      const warning = isUnsupported
+        ? 'No supported fieldKey detected.'
+        : hasMissingValue
+          ? `Missing profile value for ${field.fieldKey}.`
+          : '';
+      return {
+        ...field,
+        displayLabel: getDetectedFieldLabel(field),
+        fieldKeyLabel: getFieldKeyLabel(field.fieldKey),
+        profileValue,
+        rowDisabled,
+        rowEnabled,
+        warning,
+      };
+    });
+  }, [autofillEnabledByField, detectedFormFields, savedProfile]);
+  const enabledAutofillCount = autofillPreviewRows.filter((field) => field.rowEnabled).length;
+  const matchedProfileValueCount = autofillPreviewRows.filter((field) => field.profileValue.trim().length > 0).length;
+  const fillNow = useCallback(async () => {
+    if (activeTabId == null) {
+      setError('Open an HTTP(S) tab to fill fields.');
+      showToast('error', 'No active tab available for filling.');
+      return;
+    }
+
+    const selections: FormFillSelection[] = autofillPreviewRows
+      .filter((field) => field.rowEnabled && field.fieldKey != null && field.profileValue.trim().length > 0)
+      .map((field) => ({
+        index: field.index,
+        fieldKey: field.fieldKey as AutofillFieldKey,
+        value: field.profileValue,
+      }));
+
+    if (selections.length === 0) {
+      showToast('error', 'No enabled fields to fill.');
+      return;
+    }
+
+    setError(null);
+    setUndoSummary(null);
+    setIsFillNowLoading(true);
+    try {
+      const response = await sendTabMessage<FormFillResponse>(activeTabId, {
+        type: 'FORM_FILL_FIELDS',
+        selections,
+      });
+      if (!response.ok || !response.summary) {
+        throw new Error(response.error || 'Fill operation failed.');
+      }
+      setFillSummary(response.summary);
+      setUndoAvailable(Boolean(response.undoAvailable));
+      showToast('success', `Filled ${response.summary.filled} of ${response.summary.requested} fields.`);
+    } catch (fillError) {
+      const message = fillError instanceof Error ? fillError.message : 'Fill operation failed.';
+      setError(message);
+      showToast('error', 'Failed to fill fields on this page.');
+    } finally {
+      setIsFillNowLoading(false);
+    }
+  }, [activeTabId, autofillPreviewRows, showToast]);
+  const undoFill = useCallback(async () => {
+    if (activeTabId == null) {
+      setError('Open an HTTP(S) tab to undo fill.');
+      showToast('error', 'No active tab available for undo.');
+      return;
+    }
+
+    setError(null);
+    setIsUndoLoading(true);
+    try {
+      const response = await sendTabMessage<FormUndoResponse>(activeTabId, { type: 'FORM_UNDO_FILL' });
+      if (!response.ok || !response.summary) {
+        throw new Error(response.error || 'Undo failed.');
+      }
+      setUndoSummary(response.summary);
+      setUndoAvailable(Boolean(response.undoAvailable));
+      showToast('success', `Restored ${response.summary.restored} of ${response.summary.undoable} fields.`);
+    } catch (undoError) {
+      const message = undoError instanceof Error ? undoError.message : 'Undo failed.';
+      setError(message);
+      showToast('error', 'Failed to undo last fill.');
+    } finally {
+      setIsUndoLoading(false);
+    }
+  }, [activeTabId, showToast]);
   const audioLineLabel =
     audioState.currentLineIndex >= 0 && audioState.totalLines > 0
       ? `Line ${audioState.currentLineIndex + 1} of ${audioState.totalLines}`
@@ -850,14 +1273,14 @@ function App() {
       <header className="unity-header">
         <div>
           <p className="kicker">Unity</p>
-          <h1>{activePane === 'chat' ? 'Grounded Tab Chat' : 'Audio Reader'}</h1>
+          <h1>{paneTitleByTab[activePane]}</h1>
         </div>
         <div className="header-actions">
-          {activePane === 'audio' && (
+          {activePane === 'audio' ? (
             <button type="button" className="icon-btn" onClick={() => void refreshAudioState()} disabled={!canUseAudio}>
               <RotateCcw size={14} className={isAudioLoading ? 'spin' : ''} />
             </button>
-          )}
+          ) : null}
           <button type="button" className="icon-btn" onClick={() => setIsSettingsOpen(true)}>
             <Settings size={14} />
           </button>
@@ -882,6 +1305,24 @@ function App() {
           onClick={() => setActivePane('audio')}
         >
           Audio
+        </button>
+        <button
+          type="button"
+          className={`panel-tab ${activePane === 'profile' ? 'panel-tab--active' : ''}`.trim()}
+          role="tab"
+          aria-selected={activePane === 'profile'}
+          onClick={() => setActivePane('profile')}
+        >
+          Profile
+        </button>
+        <button
+          type="button"
+          className={`panel-tab ${activePane === 'autofill' ? 'panel-tab--active' : ''}`.trim()}
+          role="tab"
+          aria-selected={activePane === 'autofill'}
+          onClick={() => setActivePane('autofill')}
+        >
+          Autofill
         </button>
       </section>
 
@@ -964,7 +1405,7 @@ function App() {
             </div>
           </form>
         </>
-      ) : (
+      ) : activePane === 'audio' ? (
         <section className="audio-pane">
           <div className="audio-read-row">
             <button
@@ -1070,8 +1511,181 @@ function App() {
             </p>
           </div>
         </section>
+      ) : activePane === 'profile' ? (
+        <section className="profile-pane">
+          <div className="profile-summary-card">
+            <p className="profile-summary-title">Autofill Profile</p>
+            <p className="profile-summary-note">Saved only in extension local storage for future autofill use.</p>
+          </div>
+
+          {isProfileLoading ? (
+            <div className="profile-loading-card">
+              <LoaderCircle size={14} className="spin" />
+              <span>Loading saved profile...</span>
+            </div>
+          ) : (
+            <form
+              className="profile-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void saveProfileData();
+              }}
+            >
+              {profileFieldConfigs.map((field) => (
+                <label key={field.key} className="profile-field">
+                  <span className="profile-field-label">{field.label}</span>
+                  <input
+                    type={field.type ?? 'text'}
+                    autoComplete={field.autoComplete}
+                    className="profile-input"
+                    value={profileForm[field.key]}
+                    onChange={(event) => updateProfileField(field.key, event.target.value)}
+                    disabled={isProfileSaving}
+                  />
+                </label>
+              ))}
+              <div className="profile-actions">
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => void clearProfileData()}
+                  disabled={isProfileSaving}
+                >
+                  Clear
+                </button>
+                <button type="submit" className="primary-btn" disabled={isProfileSaving}>
+                  {isProfileSaving ? <LoaderCircle size={14} className="spin" /> : 'Save'}
+                </button>
+              </div>
+            </form>
+          )}
+        </section>
+      ) : (
+        <section className="autofill-pane">
+          <div className="profile-summary-card">
+            <p className="profile-summary-title">Autofill Preview</p>
+            <p className="profile-summary-note">
+              Uses saved profile values only. Fields are filled only when you click "Fill Now".
+            </p>
+          </div>
+
+          <div className="profile-detect-card">
+            <div className="profile-detect-head">
+              <p className="profile-summary-title">Page Field Detection</p>
+              <div className="profile-detect-actions">
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => void scanFormFields()}
+                  disabled={isFieldScanLoading || isFillNowLoading || isUndoLoading || isProfileLoading || activeTabId == null}
+                >
+                  {isFieldScanLoading ? <LoaderCircle size={14} className="spin" /> : 'Scan Page'}
+                </button>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={() => void fillNow()}
+                  disabled={
+                    isFillNowLoading ||
+                    isFieldScanLoading ||
+                    isUndoLoading ||
+                    isProfileLoading ||
+                    activeTabId == null ||
+                    enabledAutofillCount === 0
+                  }
+                >
+                  {isFillNowLoading ? <LoaderCircle size={14} className="spin" /> : 'Fill Now'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => void undoFill()}
+                  disabled={
+                    isUndoLoading ||
+                    isFillNowLoading ||
+                    isFieldScanLoading ||
+                    isProfileLoading ||
+                    activeTabId == null ||
+                    !undoAvailable
+                  }
+                >
+                  {isUndoLoading ? <LoaderCircle size={14} className="spin" /> : 'Undo'}
+                </button>
+              </div>
+            </div>
+            <p className="profile-summary-note">
+              {autofillPreviewRows.length === 0
+                ? 'No fields scanned yet.'
+                : `Detected ${autofillPreviewRows.length} fields. ${classifiedFieldCount} classified, ${matchedProfileValueCount} with profile values, ${enabledAutofillCount} enabled.`}
+            </p>
+          </div>
+
+          {fillSummary && (
+            <div className="autofill-summary-card">
+              <p className="profile-summary-title">Last Fill Summary</p>
+              <p className="profile-summary-note">
+                Filled {fillSummary.filled} of {fillSummary.requested} selected fields. Skipped {fillSummary.skipped}.
+              </p>
+              {Object.keys(fillSummary.skippedByReason).length > 0 && (
+                <p className="autofill-summary-reasons">
+                  {Object.entries(fillSummary.skippedByReason)
+                    .map(([reason, count]) => `${formatSkipReason(reason)}: ${count}`)
+                    .join(' | ')}
+                </p>
+              )}
+            </div>
+          )}
+
+          {undoSummary && (
+            <div className="autofill-summary-card">
+              <p className="profile-summary-title">Last Undo Summary</p>
+              <p className="profile-summary-note">
+                Restored {undoSummary.restored} of {undoSummary.undoable} fields. Skipped {undoSummary.skipped}.
+              </p>
+              {Object.keys(undoSummary.skippedByReason).length > 0 && (
+                <p className="autofill-summary-reasons">
+                  {Object.entries(undoSummary.skippedByReason)
+                    .map(([reason, count]) => `${formatSkipReason(reason)}: ${count}`)
+                    .join(' | ')}
+                </p>
+              )}
+            </div>
+          )}
+
+          {autofillPreviewRows.length === 0 ? (
+            <div className="autofill-empty-card">
+              <p>Run "Scan Page" to preview detected fields and mapped profile values.</p>
+            </div>
+          ) : (
+            <div className="autofill-preview-list">
+              {autofillPreviewRows.map((field) => (
+                <label
+                  key={`${field.index}-${field.elementType}-${field.id}-${field.name}`}
+                  className={`autofill-preview-row ${field.warning ? 'autofill-preview-row--warning' : ''} ${field.rowDisabled ? 'autofill-preview-row--disabled' : ''}`.trim()}
+                >
+                  <input
+                    type="checkbox"
+                    className="autofill-preview-checkbox"
+                    checked={field.rowEnabled}
+                    disabled={field.rowDisabled}
+                    onChange={(event) => {
+                      toggleAutofillField(field.index, event.target.checked);
+                    }}
+                  />
+                  <div className="autofill-preview-content">
+                    <p className="autofill-preview-label">{field.displayLabel}</p>
+                    <p className="autofill-preview-meta">fieldKey: {field.fieldKeyLabel}</p>
+                    <p className="autofill-preview-meta">value: {field.profileValue || '-'}</p>
+                    {field.warning && <p className="autofill-preview-warning">{field.warning}</p>}
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
+        </section>
       )}
 
+      {toast && <p className={`toast toast--${toast.tone}`}>{toast.text}</p>}
       {error && <p className="error-text">{error}</p>}
       {activeTabUrl && <p className="tab-url">{activeTabUrl}</p>}
 

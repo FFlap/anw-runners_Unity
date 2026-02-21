@@ -1,4 +1,9 @@
-import type { RewriteLevel, RuntimeRequest } from '@/lib/types';
+import type {
+  AutofillFieldKey,
+  DetectedFormField,
+  RewriteLevel,
+  RuntimeRequest,
+} from '@/lib/types';
 import {
   AUDIO_FOLLOW_MODE_STORAGE_KEY,
   AUDIO_RATE_STORAGE_KEY,
@@ -26,6 +31,7 @@ const AUDIO_PAGE_FOLLOW_LINE_ADVANCE_HYSTERESIS = 0.38;
 const AUDIO_PAGE_FOLLOW_MIN_ADVANCE_MS = 320;
 
 const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeof browser;
+let latestUndoEntries: UndoFillEntry[] | null = null;
 
 type SelectionAction = 'simplify' | 'summarize';
 type CardState = 'loading' | 'done' | 'error';
@@ -65,6 +71,36 @@ type AudioContentRequest =
   | { type: 'AUDIO_STOP' }
   | { type: 'AUDIO_SET_RATE'; rate: number }
   | { type: 'AUDIO_SET_FOLLOW_MODE'; enabled: boolean };
+
+type FormFieldScanRequest = { type: 'FORM_SCAN_FIELDS' };
+type FormFillSelection = {
+  index: number;
+  fieldKey: AutofillFieldKey;
+  value: string;
+};
+type FormFieldFillRequest = { type: 'FORM_FILL_FIELDS'; selections: FormFillSelection[] };
+type FormUndoFillRequest = { type: 'FORM_UNDO_FILL' };
+type FormUndoStatusRequest = { type: 'FORM_GET_UNDO_STATUS' };
+type ContentRequest =
+  | AudioContentRequest
+  | FormFieldScanRequest
+  | FormFieldFillRequest
+  | FormUndoFillRequest
+  | FormUndoStatusRequest;
+
+interface FormFillSummary {
+  requested: number;
+  filled: number;
+  skipped: number;
+  skippedByReason: Record<string, number>;
+}
+
+interface FormUndoSummary {
+  undoable: number;
+  restored: number;
+  skipped: number;
+  skippedByReason: Record<string, number>;
+}
 
 interface AudioContentState {
   available: boolean;
@@ -117,6 +153,523 @@ function clamp(value: number, min: number, max: number): number {
 function clampAudioRate(rate: number): number {
   if (!Number.isFinite(rate)) return 1;
   return clamp(rate, 0.75, 2);
+}
+
+function normalizeInlineText(value: string | null | undefined): string {
+  return (value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeFieldSignal(value: string | null | undefined): string {
+  return ` ${normalizeInlineText(
+    (value ?? '')
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/[_./-]+/g, ' '),
+  )
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')} `;
+}
+
+function extractElementText(element: Element | null): string {
+  return normalizeInlineText(element?.textContent ?? '');
+}
+
+function collectAssociatedLabelText(
+  field: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+): string {
+  const candidates = new Set<string>();
+  const addCandidate = (value: string | null | undefined) => {
+    const normalized = normalizeInlineText(value);
+    if (!normalized) return;
+    candidates.add(normalized.slice(0, 180));
+  };
+
+  for (const label of Array.from(field.labels ?? [])) {
+    addCandidate(extractElementText(label));
+  }
+
+  const rawId = normalizeInlineText(field.id);
+  if (rawId && typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    for (const label of Array.from(document.querySelectorAll(`label[for="${CSS.escape(rawId)}"]`))) {
+      addCandidate(extractElementText(label));
+    }
+  }
+
+  addCandidate(extractElementText(field.closest('label')));
+  addCandidate(field.getAttribute('aria-label'));
+
+  const labelledBy = normalizeInlineText(field.getAttribute('aria-labelledby'));
+  if (labelledBy) {
+    for (const id of labelledBy.split(/\s+/)) {
+      addCandidate(extractElementText(document.getElementById(id)));
+    }
+  }
+
+  const parent = field.parentElement;
+  if (parent) {
+    const directLabel = parent.querySelector(':scope > label, :scope > legend, :scope > .label, :scope > [data-label]');
+    if (directLabel && !directLabel.contains(field)) {
+      addCandidate(extractElementText(directLabel));
+    }
+
+    let previousSibling = field.previousElementSibling;
+    while (previousSibling) {
+      if (!previousSibling.matches('script,style')) {
+        const text = extractElementText(previousSibling);
+        if (text) {
+          addCandidate(text);
+          break;
+        }
+      }
+      previousSibling = previousSibling.previousElementSibling;
+    }
+  }
+
+  const fieldsetLegend = field.closest('fieldset')?.querySelector('legend');
+  addCandidate(extractElementText(fieldsetLegend ?? null));
+
+  const tableCell = field.closest('td,th');
+  if (tableCell) {
+    addCandidate(extractElementText(tableCell.previousElementSibling));
+    const rowHeader = tableCell.parentElement?.querySelector('th');
+    if (rowHeader && !rowHeader.contains(field)) {
+      addCandidate(extractElementText(rowHeader));
+    }
+  }
+
+  return Array.from(candidates).join(' | ');
+}
+
+function classifyFromAutocomplete(autocomplete: string): AutofillFieldKey | null {
+  if (!autocomplete) return null;
+
+  const tokens = autocomplete
+    .toLowerCase()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .reverse();
+
+  for (const token of tokens) {
+    if (
+      token.startsWith('section-') ||
+      token === 'shipping' ||
+      token === 'billing' ||
+      token === 'home' ||
+      token === 'work'
+    ) {
+      continue;
+    }
+    if (token === 'email') return 'email';
+    if (token === 'given-name') return 'firstName';
+    if (token === 'family-name') return 'lastName';
+    if (token === 'name') return 'fullName';
+    if (token === 'street-address' || token === 'address-line1') return 'addressLine1';
+    if (token === 'address-line2' || token === 'address-line3') return 'addressLine2';
+    if (token === 'address-level2') return 'city';
+    if (token === 'address-level1') return 'stateProvince';
+    if (token === 'postal-code') return 'postalZip';
+    if (token === 'country' || token === 'country-name') return 'country';
+    if (token === 'tel' || token.startsWith('tel-')) return 'phone';
+  }
+
+  return null;
+}
+
+function classifyFieldKey({
+  inputType,
+  autocomplete,
+  labelText,
+  placeholder,
+  name,
+  id,
+}: {
+  inputType: string;
+  autocomplete: string;
+  labelText: string;
+  placeholder: string;
+  name: string;
+  id: string;
+}): AutofillFieldKey | null {
+  const fromAutocomplete = classifyFromAutocomplete(autocomplete);
+  if (fromAutocomplete) return fromAutocomplete;
+
+  if (inputType === 'email') return 'email';
+  if (inputType === 'tel') return 'phone';
+
+  const signal = normalizeFieldSignal(`${labelText} ${placeholder} ${name} ${id}`);
+
+  if (!signal.trim()) return null;
+  const hasEmailSignal = /\b(e mail|email)\b/.test(signal);
+  const hasPhoneSignal = /\b(phone|mobile|telephone|tel|cell)\b/.test(signal);
+  const hasFirstNameSignal = /\b(first|given)\s+name\b|\bgivenname\b|\bfname\b/.test(signal);
+  const hasLastNameSignal = /\b(last|family|sur|surname)\s+name\b|\bfamilyname\b|\blname\b/.test(signal);
+  const hasAddressLine2Signal =
+    /\b(address|addr)\s*(line)?\s*2\b|\b(address|addr)\s*(line)?\s*two\b|\bapt\b|\bapartment\b|\bsuite\b|\bste\b|\bunit\b|\bbuilding\b|\bfloor\b|\bfl\b/.test(
+      signal,
+    );
+  const hasAddressLine1Signal =
+    /\baddress\s*(line)?\s*1\b|\baddress\s*(line)?\s*one\b|\bstreet\s*address\b|\b(address|addr|street|st|road|rd|avenue|ave|boulevard|blvd|lane|ln|drive|dr|house\s*number|street\s*name)\b/.test(
+      signal,
+    );
+  const hasCitySignal = /\bcity\b|\btown\b|\bmunicipality\b|\bsuburb\b|\bdistrict\b|\bneighbo[u]?rhood\b/.test(
+    signal,
+  );
+  const hasStateSignal = /\bstate\b|\bprovince\b|\bregion\b|\bcounty\b/.test(signal);
+  const hasPostalSignal = /\bzip\b|\bpostal\b|\bpostcode\b|\bpost\s*code\b|\bpin\s*code\b/.test(signal);
+  const hasCountrySignal = /\bcountry\b|\bnation\b/.test(signal);
+
+  if (hasEmailSignal) return 'email';
+  if (hasPhoneSignal) return 'phone';
+  if (hasAddressLine2Signal) return 'addressLine2';
+  if (hasAddressLine1Signal) return 'addressLine1';
+  if (hasCitySignal) return 'city';
+  if (hasStateSignal) return 'stateProvince';
+  if (hasPostalSignal) return 'postalZip';
+  if (hasCountrySignal) return 'country';
+  if (hasFirstNameSignal) return 'firstName';
+  if (hasLastNameSignal) return 'lastName';
+
+  const hasOrgOrAccountSignal =
+    /\b(company|business|organization|organisation|org|username|user\s*name|account|login)\b/.test(signal);
+
+  if (/\b(full|your|contact)\s+name\b|\bfullname\b/.test(signal)) return 'fullName';
+  if (/\bname\b/.test(signal) && !hasOrgOrAccountSignal) return 'fullName';
+
+  return null;
+}
+
+function isFillableField(
+  field: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+): boolean {
+  if (!field.isConnected) return false;
+  if (field.closest('[hidden]')) return false;
+  if (field.disabled) return false;
+
+  if (field instanceof HTMLInputElement) {
+    const inputType = (field.getAttribute('type') ?? 'text').toLowerCase();
+    if (['hidden', 'submit', 'reset', 'button', 'image', 'file'].includes(inputType)) return false;
+    if (field.readOnly) return false;
+  }
+
+  if (field instanceof HTMLTextAreaElement && field.readOnly) {
+    return false;
+  }
+
+  const style = window.getComputedStyle(field);
+  if (style.display === 'none' || style.visibility === 'hidden') return false;
+  if (field.getClientRects().length === 0) return false;
+
+  return true;
+}
+
+type FillableFormElement = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+
+interface FillableFormFieldEntry {
+  element: FillableFormElement;
+  field: DetectedFormField;
+}
+
+interface UndoFillEntry {
+  element: FillableFormElement;
+  previousValue: string;
+}
+
+function detectFillableFormFieldEntries(): FillableFormFieldEntry[] {
+  const elements = Array.from(
+    document.querySelectorAll<FillableFormElement>('input, textarea, select'),
+  );
+
+  const fields: FillableFormFieldEntry[] = [];
+
+  for (const field of elements) {
+    if (!isFillableField(field)) continue;
+
+    const elementType: DetectedFormField['elementType'] =
+      field instanceof HTMLInputElement
+        ? 'input'
+        : field instanceof HTMLTextAreaElement
+          ? 'textarea'
+          : 'select';
+    const inputType = field instanceof HTMLInputElement
+      ? (field.getAttribute('type') ?? 'text').toLowerCase()
+      : field instanceof HTMLTextAreaElement
+        ? 'textarea'
+        : field.multiple
+          ? 'select-multiple'
+          : 'select-one';
+    const name = normalizeInlineText(field.getAttribute('name'));
+    const id = normalizeInlineText(field.id);
+    const autocomplete = normalizeInlineText(field.getAttribute('autocomplete'));
+    const placeholder =
+      field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement
+        ? normalizeInlineText(field.getAttribute('placeholder'))
+        : '';
+    const labelText = collectAssociatedLabelText(field);
+    const fieldKey = classifyFieldKey({
+      inputType,
+      autocomplete,
+      labelText,
+      placeholder,
+      name,
+      id,
+    });
+
+    fields.push({
+      element: field,
+      field: {
+        index: fields.length,
+        elementType,
+        inputType,
+        name,
+        id,
+        autocomplete,
+        placeholder,
+        labelText,
+        fieldKey,
+      },
+    });
+  }
+
+  return fields;
+}
+
+function detectFillableFormFields(): DetectedFormField[] {
+  return detectFillableFormFieldEntries().map((entry) => entry.field);
+}
+
+function isCreditCardLikeField(field: DetectedFormField): boolean {
+  const autocomplete = field.autocomplete.toLowerCase();
+  if (
+    /\bcc-(name|number|exp|exp-month|exp-year|csc|type)\b/.test(autocomplete) ||
+    autocomplete === 'cc-name' ||
+    autocomplete === 'cc-number' ||
+    autocomplete === 'cc-exp' ||
+    autocomplete === 'cc-exp-month' ||
+    autocomplete === 'cc-exp-year' ||
+    autocomplete === 'cc-csc'
+  ) {
+    return true;
+  }
+
+  const signal = normalizeInlineText(
+    `${field.labelText} ${field.placeholder} ${field.name} ${field.id} ${field.autocomplete}`,
+  )
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ');
+
+  return /\b(credit|debit|card|cc number|card number|cvv|cvc|security code|expiry|expiration|exp date)\b/.test(
+    signal,
+  );
+}
+
+function setNativeFieldValue(element: FillableFormElement, nextValue: string): void {
+  const prototype =
+    element instanceof HTMLInputElement
+      ? HTMLInputElement.prototype
+      : element instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLSelectElement.prototype;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+  if (descriptor?.set) {
+    descriptor.set.call(element, nextValue);
+    return;
+  }
+  element.value = nextValue;
+}
+
+function dispatchInputAndChange(element: FillableFormElement): void {
+  element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+  element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+}
+
+function resolveSelectOptionValue(select: HTMLSelectElement, targetValue: string): string | null {
+  const options = Array.from(select.options);
+  const exactRawMatch = options.find((option) => option.value === targetValue);
+  if (exactRawMatch) return exactRawMatch.value;
+
+  const normalizedTarget = normalizeInlineText(targetValue);
+  if (!normalizedTarget) return null;
+
+  const exactValue = options.find((option) => option.value === normalizedTarget);
+  if (exactValue) return exactValue.value;
+
+  const normalizedLower = normalizedTarget.toLowerCase();
+  const normalizedValueMatch = options.find(
+    (option) => normalizeInlineText(option.value).toLowerCase() === normalizedLower,
+  );
+  if (normalizedValueMatch) return normalizedValueMatch.value;
+
+  const textMatch = options.find(
+    (option) => normalizeInlineText(option.textContent ?? '').toLowerCase() === normalizedLower,
+  );
+  if (textMatch) return textMatch.value;
+
+  return null;
+}
+
+function fillDomField(
+  entry: FillableFormFieldEntry,
+  value: string,
+): { filled: boolean; reason?: string; undoEntry?: UndoFillEntry } {
+  const { element } = entry;
+
+  if (!isFillableField(element)) {
+    return { filled: false, reason: 'hidden_disabled_or_readonly' };
+  }
+
+  if (element instanceof HTMLInputElement) {
+    const inputType = (element.getAttribute('type') ?? 'text').toLowerCase();
+    if (inputType === 'password') {
+      return { filled: false, reason: 'password_field' };
+    }
+    if (['checkbox', 'radio', 'file', 'range', 'color', 'button', 'submit', 'reset'].includes(inputType)) {
+      return { filled: false, reason: 'unsupported_input_type' };
+    }
+  }
+
+  if (isCreditCardLikeField(entry.field)) {
+    return { filled: false, reason: 'credit_card_like_field' };
+  }
+
+  const previousValue = element.value;
+
+  if (element instanceof HTMLSelectElement) {
+    const optionValue = resolveSelectOptionValue(element, value);
+    if (optionValue == null) {
+      return { filled: false, reason: 'select_option_not_found' };
+    }
+    setNativeFieldValue(element, optionValue);
+    dispatchInputAndChange(element);
+    return {
+      filled: true,
+      undoEntry:
+        previousValue !== optionValue
+          ? {
+              element,
+              previousValue,
+            }
+          : undefined,
+    };
+  }
+
+  setNativeFieldValue(element, value);
+  dispatchInputAndChange(element);
+  return {
+    filled: true,
+    undoEntry:
+      previousValue !== value
+        ? {
+            element,
+            previousValue,
+          }
+        : undefined,
+  };
+}
+
+function fillDetectedFormFields(selections: FormFillSelection[]): FormFillSummary {
+  latestUndoEntries = null;
+
+  const summary: FormFillSummary = {
+    requested: selections.length,
+    filled: 0,
+    skipped: 0,
+    skippedByReason: {},
+  };
+  const undoEntries: UndoFillEntry[] = [];
+
+  const addSkip = (reason: string) => {
+    summary.skipped += 1;
+    summary.skippedByReason[reason] = (summary.skippedByReason[reason] ?? 0) + 1;
+  };
+
+  const entriesByIndex = new Map(
+    detectFillableFormFieldEntries().map((entry) => [entry.field.index, entry]),
+  );
+
+  for (const selection of selections) {
+    const normalizedValue = normalizeInlineText(selection.value);
+    if (!normalizedValue) {
+      addSkip('missing_profile_value');
+      continue;
+    }
+
+    const entry = entriesByIndex.get(selection.index);
+    if (!entry) {
+      addSkip('field_not_found');
+      continue;
+    }
+
+    if (entry.field.fieldKey !== selection.fieldKey) {
+      addSkip('field_key_mismatch');
+      continue;
+    }
+
+    const result = fillDomField(entry, normalizedValue);
+    if (!result.filled) {
+      addSkip(result.reason ?? 'fill_failed');
+      continue;
+    }
+
+    if (result.undoEntry) {
+      undoEntries.push(result.undoEntry);
+    }
+    summary.filled += 1;
+  }
+
+  if (undoEntries.length > 0) {
+    latestUndoEntries = undoEntries;
+  }
+
+  return summary;
+}
+
+function getUndoAvailability(): boolean {
+  return Boolean(latestUndoEntries && latestUndoEntries.length > 0);
+}
+
+function undoLastFillAction(): FormUndoSummary {
+  const entries = latestUndoEntries;
+  if (!entries || entries.length === 0) {
+    throw new Error('No recent fill action to undo.');
+  }
+  latestUndoEntries = null;
+
+  const summary: FormUndoSummary = {
+    undoable: entries.length,
+    restored: 0,
+    skipped: 0,
+    skippedByReason: {},
+  };
+
+  const addSkip = (reason: string) => {
+    summary.skipped += 1;
+    summary.skippedByReason[reason] = (summary.skippedByReason[reason] ?? 0) + 1;
+  };
+
+  for (const entry of entries) {
+    if (!entry.element.isConnected) {
+      addSkip('field_unavailable');
+      continue;
+    }
+
+    if (entry.element instanceof HTMLSelectElement) {
+      const optionValue = resolveSelectOptionValue(entry.element, entry.previousValue);
+      if (optionValue == null) {
+        addSkip('select_option_not_found');
+        continue;
+      }
+      setNativeFieldValue(entry.element, optionValue);
+      dispatchInputAndChange(entry.element);
+      summary.restored += 1;
+      continue;
+    }
+
+    setNativeFieldValue(entry.element, entry.previousValue);
+    dispatchInputAndChange(entry.element);
+    summary.restored += 1;
+  }
+
+  return summary;
 }
 
 function installStyles() {
@@ -1779,17 +2332,51 @@ export default defineContentScript({
       _sender: unknown,
       sendResponse: (response?: unknown) => void,
     ) => {
-      const message = rawMessage as AudioContentRequest | undefined;
+      const message = rawMessage as ContentRequest | undefined;
       if (!message || typeof message !== 'object' || typeof (message as { type?: unknown }).type !== 'string') {
         return;
       }
-      if (!(message.type as string).startsWith('AUDIO_')) {
+      if (
+        message.type !== 'FORM_SCAN_FIELDS' &&
+        message.type !== 'FORM_FILL_FIELDS' &&
+        message.type !== 'FORM_UNDO_FILL' &&
+        message.type !== 'FORM_GET_UNDO_STATUS' &&
+        !(message.type as string).startsWith('AUDIO_')
+      ) {
         return;
       }
 
       void (async () => {
         try {
           switch (message.type) {
+            case 'FORM_SCAN_FIELDS':
+              sendResponse({
+                ok: true,
+                fields: detectFillableFormFields(),
+              });
+              return;
+            case 'FORM_FILL_FIELDS': {
+              const fillSummary = fillDetectedFormFields(Array.isArray(message.selections) ? message.selections : []);
+              sendResponse({
+                ok: true,
+                summary: fillSummary,
+                undoAvailable: getUndoAvailability(),
+              });
+              return;
+            }
+            case 'FORM_UNDO_FILL':
+              sendResponse({
+                ok: true,
+                summary: undoLastFillAction(),
+                undoAvailable: getUndoAvailability(),
+              });
+              return;
+            case 'FORM_GET_UNDO_STATUS':
+              sendResponse({
+                ok: true,
+                undoAvailable: getUndoAvailability(),
+              });
+              return;
             case 'AUDIO_GET_STATE':
             case 'AUDIO_GET_SELECTION':
               sendResponse(audioResponse(true));
@@ -1828,6 +2415,27 @@ export default defineContentScript({
               sendResponse(audioResponse(false, 'Unknown audio message.'));
           }
         } catch (error) {
+          if (
+            message.type === 'FORM_SCAN_FIELDS' ||
+            message.type === 'FORM_FILL_FIELDS' ||
+            message.type === 'FORM_UNDO_FILL' ||
+            message.type === 'FORM_GET_UNDO_STATUS'
+          ) {
+            sendResponse({
+              ok: false,
+              error:
+                error instanceof Error
+                  ? error.message
+                  : message.type === 'FORM_FILL_FIELDS'
+                    ? 'Field fill failed.'
+                    : message.type === 'FORM_UNDO_FILL'
+                      ? 'Undo failed.'
+                      : message.type === 'FORM_GET_UNDO_STATUS'
+                        ? 'Failed to fetch undo status.'
+                        : 'Field scan failed.',
+            });
+            return;
+          }
           sendResponse(audioResponse(false, error instanceof Error ? error.message : 'Audio command failed.'));
         }
       })();
