@@ -20,6 +20,7 @@ import type {
   ChatSession,
   EmbeddedPanelUpdate,
   ExtractionResult,
+  MainArticleContent,
   RuntimeRequest,
   ScanKind,
   ScanReport,
@@ -42,6 +43,10 @@ const inFlightScans = new Map<number, Promise<void>>();
 const inFlightQuestions = new Map<number, Promise<{ answer: ChatMessage; session: ChatSession }>>();
 
 const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeof browser;
+
+type MainArticleTabResponse =
+  | { ok: true; article: MainArticleContent; url: string; title: string }
+  | { ok: false; error?: string };
 
 function parseYouTubeVideoId(url: string): string | undefined {
   try {
@@ -627,6 +632,49 @@ async function executeOnTab<T>(
   return result.result as T;
 }
 
+async function extractMainArticleOnTab(tabId: number): Promise<{
+  article: MainArticleContent;
+  url: string;
+  title: string;
+}> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const response = (await ext.tabs.sendMessage(tabId, { type: 'ARTICLE_EXTRACT_MAIN' })) as
+        | MainArticleTabResponse
+        | undefined;
+
+      if (!response) {
+        throw new Error('No response from page while extracting article.');
+      }
+
+      if (!response.ok) {
+        throw new Error(response.error || 'Could not isolate main article text on this page.');
+      }
+
+      const articleText = response.article?.text?.trim();
+      if (!articleText) {
+        throw new Error('Main article extraction returned empty text.');
+      }
+
+      return {
+        article: response.article,
+        url: response.url,
+        title: response.title,
+      };
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 140 + attempt * 120));
+    }
+  }
+
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error('Could not isolate main article text on this page.');
+}
+
 async function fetchTranscriptByVideoId(
   videoId: string,
   tabId?: number,
@@ -766,19 +814,19 @@ async function fetchTranscriptByVideoId(
 
 async function runScan(tabId: number): Promise<void> {
   try {
-    setStatus(tabId, 'extracting', 'Collecting visible content from this tab...', 0.2);
+    setStatus(tabId, 'extracting', 'Collecting page content from this tab...', 0.2);
     await executeOnTab(tabId, clearHighlightsInPage).catch(() => {});
 
     const extraction = await executeOnTab<ExtractionResult>(tabId, extractVisibleTextInPage);
-    if (!extraction.text || extraction.text.trim().length < 50) {
-      throw new Error('The page did not provide enough visible text to analyze.');
-    }
-
     const scanKind: ScanKind = isYouTubeWatchUrl(extraction.url) ? 'youtube_video' : 'webpage';
     const videoId = parseYouTubeVideoId(extraction.url);
+    let resolvedUrl = extraction.url;
+    let resolvedTitle = extraction.title;
 
     let transcriptSegments: TranscriptSegment[] = [];
     let transcriptUnavailableReason: string | undefined;
+    let mainArticle: MainArticleContent | undefined;
+    let rawText = '';
 
     if (scanKind === 'youtube_video' && videoId) {
       setStatus(tabId, 'extracting', 'Loading YouTube transcript for grounded chat...', 0.45);
@@ -788,19 +836,30 @@ async function runScan(tabId: number): Promise<void> {
       } else {
         transcriptUnavailableReason = transcript.reason ?? 'Transcript unavailable.';
       }
-    }
 
-    const rawText = transcriptSegments.length > 0
-      ? transcriptSegments.map((segment) => `[${segment.startLabel}] ${segment.text}`).join('\n')
-      : extraction.text;
+      rawText = transcriptSegments.length > 0
+        ? transcriptSegments.map((segment) => `[${segment.startLabel}] ${segment.text}`).join('\n')
+        : extraction.text;
+
+      if (!rawText || rawText.trim().length < 50) {
+        throw new Error('The page did not provide enough visible text to analyze.');
+      }
+    } else {
+      setStatus(tabId, 'extracting', 'Isolating main article text...', 0.45);
+      const extractedArticle = await extractMainArticleOnTab(tabId);
+      mainArticle = extractedArticle.article;
+      resolvedUrl = extractedArticle.url || extraction.url;
+      resolvedTitle = extractedArticle.title || extraction.title;
+      rawText = extractedArticle.article.text;
+    }
 
     const text = rawText.slice(0, MAX_CONTEXT_CHARS);
     const snippets = buildContextSnippets({ text, transcriptSegments });
 
     const context: TabContext = {
       tabId,
-      url: extraction.url,
-      title: extraction.title,
+      url: resolvedUrl,
+      title: resolvedTitle,
       scanKind,
       videoId,
       scannedAt: new Date().toISOString(),
@@ -814,6 +873,7 @@ async function runScan(tabId: number): Promise<void> {
             ...(transcriptUnavailableReason ? { unavailableReason: transcriptUnavailableReason } : {}),
           }
           : undefined,
+      ...(mainArticle ? { mainArticle } : {}),
       truncated: rawText.length > text.length,
       contextChars: text.length,
     };
@@ -860,8 +920,14 @@ async function ensureFreshContext(tabId: number): Promise<TabContext> {
 
   const existing = await getContextForTab(tabId);
   if (contextMatchesTabUrl(existing, tabUrl)) {
+    const needsMainArticleRefresh =
+      existing?.scanKind === 'webpage' &&
+      (!existing.mainArticle || !existing.mainArticle.text || !existing.mainArticle.text.trim());
+    if (!needsMainArticleRefresh) {
+      contextByTab.set(tabId, existing as TabContext);
+      return existing as TabContext;
+    }
     contextByTab.set(tabId, existing as TabContext);
-    return existing as TabContext;
   }
 
   setStatus(tabId, 'extracting', 'Preparing fresh context for this tab...', 0.1);
@@ -869,6 +935,10 @@ async function ensureFreshContext(tabId: number): Promise<TabContext> {
 
   const refreshed = await getContextForTab(tabId);
   if (!refreshed || !contextMatchesTabUrl(refreshed, tabUrl)) {
+    const status = statusByTab.get(tabId);
+    if (status?.state === 'error' && status.message) {
+      throw new Error(status.message);
+    }
     throw new Error('Could not prepare a valid context for this tab.');
   }
 
@@ -1116,6 +1186,25 @@ export default defineBackground(() => {
           const report = await getReportForTab(message.tabId);
           if (report) reportByTab.set(message.tabId, report);
           sendResponse({ report: report ?? null });
+          return;
+        }
+
+        case 'GET_MAIN_ARTICLE': {
+          const senderTabId = typeof sender.tab?.id === 'number' ? sender.tab.id : undefined;
+          const tabId = await resolveScannableTabId(message.tabId ?? senderTabId);
+          const context = await ensureFreshContext(tabId);
+
+          if (context.scanKind !== 'webpage') {
+            sendResponse({ ok: false, error: 'Reader mode is available for webpages only.' });
+            return;
+          }
+
+          if (!context.mainArticle || !context.mainArticle.text.trim()) {
+            sendResponse({ ok: false, error: 'Could not isolate the main article on this page.' });
+            return;
+          }
+
+          sendResponse({ ok: true, article: context.mainArticle, tabId });
           return;
         }
 

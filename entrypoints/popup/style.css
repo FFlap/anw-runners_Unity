@@ -197,6 +197,7 @@ select {
 
 .panel-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px 14px;
   border-bottom: 1px solid var(--unity-border);
@@ -470,6 +471,82 @@ select {
   gap: 10px;
   padding: 10px 14px 12px;
   overflow: auto;
+}
+
+.reader-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 14px 12px;
+  overflow: auto;
+}
+
+.reader-summary-card,
+.reader-loading-card,
+.reader-empty-card,
+.reader-action-card {
+  border: 1px solid var(--unity-border);
+  border-radius: 10px;
+  background: var(--unity-surface);
+}
+
+.reader-summary-card {
+  padding: 9px 10px;
+}
+
+.reader-summary-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.reader-summary-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--unity-muted);
+}
+
+.reader-loading-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  color: var(--unity-muted);
+}
+
+.reader-action-card {
+  padding: 11px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.reader-state-line {
+  margin: 0;
+  font-size: 12px;
+  color: var(--unity-muted);
+}
+
+.reader-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.reader-empty-card {
+  padding: 12px;
+  border-style: dashed;
+  background: var(--unity-empty-chat-bg);
+}
+
+.reader-empty-card p {
+  margin: 0;
+  color: var(--unity-muted);
+  font-size: 12px;
 }
 
 .audio-read-row {

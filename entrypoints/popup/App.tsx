@@ -62,7 +62,7 @@ type AskResponse = {
   session?: ChatSession;
   error?: string;
 };
-type PopupTab = 'chat' | 'audio' | 'profile' | 'autofill';
+type PopupTab = 'chat' | 'reader' | 'audio' | 'profile' | 'autofill';
 type ToastState = {
   tone: 'success' | 'error';
   text: string;
@@ -86,7 +86,11 @@ type FormTabMessage =
   | { type: 'FORM_FILL_FIELDS'; selections: FormFillSelection[] }
   | { type: 'FORM_UNDO_FILL' }
   | { type: 'FORM_GET_UNDO_STATUS' };
-type ContentTabMessage = AudioTabMessage | FormTabMessage;
+type ReaderTabMessage =
+  | { type: 'ARTICLE_ENABLE_READER_MODE' }
+  | { type: 'ARTICLE_DISABLE_READER_MODE' }
+  | { type: 'ARTICLE_GET_READER_MODE_STATE' };
+type ContentTabMessage = AudioTabMessage | FormTabMessage | ReaderTabMessage;
 type AudioState = {
   available: boolean;
   hasSelection: boolean;
@@ -136,6 +140,13 @@ type FormUndoResponse = {
 type FormUndoStatusResponse = {
   ok: boolean;
   undoAvailable?: boolean;
+  error?: string;
+};
+type ReaderModeResponse = {
+  ok: boolean;
+  enabled?: boolean;
+  articleTitle?: string;
+  charCount?: number;
   error?: string;
 };
 
@@ -190,6 +201,7 @@ const defaultAudioState: AudioState = {
 
 const paneTitleByTab: Record<PopupTab, string> = {
   chat: 'Grounded Tab Chat',
+  reader: 'Reader',
   audio: 'Audio Reader',
   profile: 'Profile',
   autofill: 'Autofill Preview',
@@ -334,6 +346,35 @@ async function sendTabMessage<T>(tabId: number, message: ContentTabMessage): Pro
     throw lastError;
   }
   throw new Error('Unable to reach the page. Refresh the tab and try again.');
+}
+
+async function resolveScannablePageTabId(preferredTabId?: number | null): Promise<number | null> {
+  const isScannableUrl = (url: string | undefined | null): boolean =>
+    typeof url === 'string' && /^https?:\/\//i.test(url);
+
+  if (typeof preferredTabId === 'number') {
+    try {
+      const tab = await ext.tabs.get(preferredTabId);
+      if (tab?.id && isScannableUrl(tab.url)) {
+        return tab.id;
+      }
+    } catch {
+      // Fall through to query-based resolution.
+    }
+  }
+
+  const activeInWindow = await ext.tabs.query({ active: true, currentWindow: true });
+  const activeScannable = activeInWindow.find((tab) => tab.id && isScannableUrl(tab.url));
+  if (activeScannable?.id) {
+    return activeScannable.id;
+  }
+
+  const allTabs = await ext.tabs.query({ currentWindow: true });
+  const candidates = allTabs
+    .filter((tab) => tab.id && isScannableUrl(tab.url))
+    .sort((left, right) => (right.lastAccessed ?? 0) - (left.lastAccessed ?? 0));
+
+  return candidates[0]?.id ?? null;
 }
 
 function formatTimestamp(iso?: string): string {
@@ -559,6 +600,10 @@ function App() {
   const [isReduceMotion, setIsReduceMotion] = useState(false);
   const [forcedFont, setForcedFontState] = useState<ForcedFontOption>('none');
   const [activePane, setActivePane] = useState<PopupTab>('chat');
+  const [isReaderModeEnabled, setIsReaderModeEnabled] = useState(false);
+  const [isReaderBusy, setIsReaderBusy] = useState(false);
+  const [readerStatus, setReaderStatus] = useState('Apply a clean article layout on the current page.');
+  const [readerError, setReaderError] = useState<string | null>(null);
   const [audioState, setAudioState] = useState<AudioState>(defaultAudioState);
   const [audioRate, setAudioRateState] = useState(1);
   const [audioFollowMode, setAudioFollowModeState] = useState(false);
@@ -599,6 +644,36 @@ function App() {
     setSession(sessionResponse.session);
   }, []);
 
+  const refreshReaderModeState = useCallback(async (tabId?: number | null) => {
+    const resolvedTabId = await resolveScannablePageTabId(tabId ?? activeTabId);
+    if (resolvedTabId == null) {
+      setIsReaderModeEnabled(false);
+      setReaderStatus('Apply a clean article layout on the current page.');
+      setReaderError('Open an HTTP(S) tab to use Reader.');
+      setIsReaderBusy(false);
+      return;
+    }
+
+    setReaderError(null);
+    try {
+      const response = await sendTabMessage<ReaderModeResponse>(resolvedTabId, { type: 'ARTICLE_GET_READER_MODE_STATE' });
+      if (!response.ok) {
+        throw new Error(response.error || 'Could not read Reader mode state on this page.');
+      }
+      const enabled = Boolean(response.enabled);
+      setIsReaderModeEnabled(enabled);
+      setReaderStatus(enabled ? 'Reader mode is active on this page.' : 'Reader mode is inactive on this page.');
+      if (resolvedTabId !== activeTabId) {
+        setActiveTabId(resolvedTabId);
+        const resolvedTab = await ext.tabs.get(resolvedTabId).catch(() => null);
+        setActiveTabUrl(typeof resolvedTab?.url === 'string' ? resolvedTab.url : activeTabUrl);
+      }
+    } catch (readerLoadError) {
+      setIsReaderModeEnabled(false);
+      setReaderError(readerLoadError instanceof Error ? readerLoadError.message : 'Reader load failed.');
+    }
+  }, [activeTabId, activeTabUrl]);
+
   const showToast = useCallback((tone: ToastState['tone'], text: string) => {
     if (toastTimerRef.current != null) {
       window.clearTimeout(toastTimerRef.current);
@@ -609,6 +684,50 @@ function App() {
       toastTimerRef.current = null;
     }, 2400);
   }, []);
+
+  const toggleReaderMode = useCallback(async () => {
+    const resolvedTabId = await resolveScannablePageTabId(activeTabId);
+    if (resolvedTabId == null) {
+      setReaderError('Open an HTTP(S) tab to use Reader.');
+      return;
+    }
+
+    setReaderError(null);
+    setIsReaderBusy(true);
+    try {
+      const message: ReaderTabMessage = isReaderModeEnabled
+        ? { type: 'ARTICLE_DISABLE_READER_MODE' }
+        : { type: 'ARTICLE_ENABLE_READER_MODE' };
+      const response = await sendTabMessage<ReaderModeResponse>(resolvedTabId, message);
+      if (!response.ok) {
+        throw new Error(response.error || 'Reader mode action failed.');
+      }
+
+      const enabled = Boolean(response.enabled);
+      setIsReaderModeEnabled(enabled);
+      if (enabled) {
+        const title = response.articleTitle ? `: ${response.articleTitle}` : '';
+        setReaderStatus(`Reader mode is active${title}`);
+        if (typeof response.charCount === 'number' && response.charCount > 0) {
+          showToast('success', `Reader mode enabled (${response.charCount} chars).`);
+        } else {
+          showToast('success', 'Reader mode enabled.');
+        }
+      } else {
+        setReaderStatus('Reader mode is inactive on this page.');
+        showToast('success', 'Reader mode disabled.');
+      }
+      if (resolvedTabId !== activeTabId) {
+        setActiveTabId(resolvedTabId);
+        const resolvedTab = await ext.tabs.get(resolvedTabId).catch(() => null);
+        setActiveTabUrl(typeof resolvedTab?.url === 'string' ? resolvedTab.url : activeTabUrl);
+      }
+    } catch (toggleError) {
+      setReaderError(toggleError instanceof Error ? toggleError.message : 'Reader mode action failed.');
+    } finally {
+      setIsReaderBusy(false);
+    }
+  }, [activeTabId, activeTabUrl, isReaderModeEnabled, showToast]);
 
   useEffect(() => {
     let cancelled = false;
@@ -693,7 +812,16 @@ function App() {
     setUndoAvailable(false);
     setFillSummary(null);
     setUndoSummary(null);
+    setIsReaderModeEnabled(false);
+    setReaderStatus('Apply a clean article layout on the current page.');
+    setReaderError(null);
+    setIsReaderBusy(false);
   }, [activeTabId]);
+
+  useEffect(() => {
+    if (activePane !== 'reader') return;
+    void refreshReaderModeState();
+  }, [activePane, activeTabId, refreshReaderModeState]);
 
   useEffect(() => {
     const RecognitionCtor = getDictationRecognitionCtor();
@@ -1321,6 +1449,17 @@ function App() {
             <button type="button" className="icon-btn" onClick={() => void refreshAudioState()} disabled={!canUseAudio}>
               <RotateCcw size={14} className={isAudioLoading ? 'spin' : ''} />
             </button>
+          ) : activePane === 'reader' ? (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => void refreshReaderModeState()}
+              disabled={activeTabId == null || isReaderBusy}
+              title="Refresh reader"
+              aria-label="Refresh reader"
+            >
+              <RotateCcw size={14} className={isReaderBusy ? 'spin' : ''} />
+            </button>
           ) : null}
           <button type="button" className="icon-btn" onClick={() => setIsSettingsOpen(true)}>
             <Settings size={14} />
@@ -1337,6 +1476,15 @@ function App() {
           onClick={() => setActivePane('chat')}
         >
           Chat
+        </button>
+        <button
+          type="button"
+          className={`panel-tab ${activePane === 'reader' ? 'panel-tab--active' : ''}`.trim()}
+          role="tab"
+          aria-selected={activePane === 'reader'}
+          onClick={() => setActivePane('reader')}
+        >
+          Reader
         </button>
         <button
           type="button"
@@ -1446,6 +1594,50 @@ function App() {
             </div>
           </form>
         </>
+      ) : activePane === 'reader' ? (
+        <section className="reader-pane">
+          <div className="reader-summary-card">
+            <p className="reader-summary-title">Page Reader Mode</p>
+            <p className="reader-summary-note">
+              Removes non-article elements from the live webpage and centers the main text.
+            </p>
+          </div>
+
+          {isReaderBusy ? (
+            <div className="reader-loading-card">
+              <LoaderCircle size={14} className="spin" />
+              <span>{isReaderModeEnabled ? 'Restoring page...' : 'Applying reader mode...'}</span>
+            </div>
+          ) : (
+            <div className="reader-action-card">
+              <p className="reader-state-line">{readerStatus}</p>
+              <div className="reader-actions">
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={() => void toggleReaderMode()}
+                  disabled={activeTabId == null || isReaderBusy}
+                >
+                  {isReaderModeEnabled ? 'Restore Page' : 'Clean Page'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => void refreshReaderModeState()}
+                  disabled={activeTabId == null || isReaderBusy}
+                >
+                  Refresh State
+                </button>
+              </div>
+            </div>
+          )}
+
+          {readerError && (
+            <div className="reader-empty-card">
+              <p>{readerError}</p>
+            </div>
+          )}
+        </section>
       ) : activePane === 'audio' ? (
         <section className="audio-pane">
           <div className="audio-read-row">

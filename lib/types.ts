@@ -37,6 +37,25 @@ export interface ContextSnippet {
   timestampLabel?: string;
 }
 
+export type MainArticleBlockType = 'heading' | 'paragraph' | 'list_item' | 'quote';
+
+export interface MainArticleBlock {
+  id: string;
+  type: MainArticleBlockType;
+  text: string;
+  level?: number;
+}
+
+export interface MainArticleContent {
+  source: 'readability';
+  articleTitle: string;
+  byline?: string;
+  text: string;
+  blocks: MainArticleBlock[];
+  charCount: number;
+  extractedAt: string;
+}
+
 export interface TabContext {
   tabId: number;
   url: string;
@@ -47,6 +66,7 @@ export interface TabContext {
   text: string;
   snippets: ContextSnippet[];
   transcript?: TranscriptPayload;
+  mainArticle?: MainArticleContent;
   truncated: boolean;
   contextChars: number;
 }
@@ -142,6 +162,7 @@ export type RuntimeRequest =
   | { type: 'GET_EMBEDDED_PANEL_STATE' }
   | { type: 'GET_SCAN_STATUS'; tabId?: number }
   | { type: 'GET_REPORT'; tabId: number }
+  | { type: 'GET_MAIN_ARTICLE'; tabId?: number }
   | { type: 'GET_TRANSCRIPT'; videoId: string; tabId?: number }
   | { type: 'GET_CHAT_SESSION'; tabId: number }
   | { type: 'CLEAR_CHAT_SESSION'; tabId: number }

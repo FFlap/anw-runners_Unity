@@ -1,6 +1,10 @@
+import { Readability } from '@mozilla/readability';
 import type {
   AutofillFieldKey,
   DetectedFormField,
+  MainArticleBlock,
+  MainArticleBlockType,
+  MainArticleContent,
   RewriteLevel,
   RuntimeRequest,
 } from '@/lib/types';
@@ -18,6 +22,9 @@ const STYLE_ID = 'cred-selection-actions-style';
 const PAGE_STYLE_ID = 'cred-page-colorblind-style';
 const PAGE_FONT_STYLE_ID = 'cred-page-forced-font-style';
 const PAGE_REDUCED_MOTION_STYLE_ID = 'cred-page-reduced-motion-style';
+const PAGE_READER_STYLE_ID = 'unity-page-reader-style';
+const PAGE_READER_MODE_ATTR = 'data-unity-reader-mode';
+const PAGE_READER_ROOT_ID = 'unity-page-reader-root';
 const ACTION_BAR_ID = 'cred-selection-actions';
 const CARD_ID = 'cred-selection-result-card';
 const AUDIO_FOLLOW_PANEL_ID = 'unity-audio-follow-panel';
@@ -96,7 +103,15 @@ type FormFillSelection = {
 type FormFieldFillRequest = { type: 'FORM_FILL_FIELDS'; selections: FormFillSelection[] };
 type FormUndoFillRequest = { type: 'FORM_UNDO_FILL' };
 type FormUndoStatusRequest = { type: 'FORM_GET_UNDO_STATUS' };
+type MainArticleRequest = { type: 'ARTICLE_EXTRACT_MAIN' };
+type ReaderModeEnableRequest = { type: 'ARTICLE_ENABLE_READER_MODE' };
+type ReaderModeDisableRequest = { type: 'ARTICLE_DISABLE_READER_MODE' };
+type ReaderModeStateRequest = { type: 'ARTICLE_GET_READER_MODE_STATE' };
 type ContentRequest =
+  | MainArticleRequest
+  | ReaderModeEnableRequest
+  | ReaderModeDisableRequest
+  | ReaderModeStateRequest
   | AudioContentRequest
   | FormFieldScanRequest
   | FormFieldFillRequest
@@ -130,6 +145,26 @@ interface AudioContentState {
   currentLineText: string;
 }
 
+interface MainArticleResponseOk {
+  ok: true;
+  article: MainArticleContent;
+  url: string;
+  title: string;
+}
+
+interface MainArticleResponseError {
+  ok: false;
+  error: string;
+}
+
+interface ReaderModeResponse {
+  ok: boolean;
+  enabled?: boolean;
+  articleTitle?: string;
+  charCount?: number;
+  error?: string;
+}
+
 interface SelectionLineRect {
   top: number;
   left: number;
@@ -161,6 +196,41 @@ const ACTION_CONFIG: Record<SelectionAction, ActionConfig> = {
   },
 };
 
+const ARTICLE_MIN_BODY_BLOCKS = 3;
+const ARTICLE_MIN_TEXT_CHARS = 360;
+const ARTICLE_NOISE_MARKER_PATTERN =
+  /\b(ad|ads|advert|sponsor|promo|outbrain|taboola|recirc|related|recommend|newsletter|subscribe|cookie|consent|banner|sidebar|comment|comments|pagination|breadcrumbs?)\b/i;
+const ARTICLE_TERMINAL_HEADING_PATTERN =
+  /^(references|external links|see also|related|recommended|comments?|further reading|sources?|footnotes?)$/i;
+const ARTICLE_LINE_NOISE_PATTERN =
+  /^(advertisement|sponsored|related|recommended(?: videos?| articles?)?|read more|continue reading|share|sign up|subscribe|cookie settings|privacy policy|terms of use|terms of service|close)$/i;
+const ARTICLE_ROOT_SELECTORS = [
+  '[itemprop="articleBody"]',
+  '[data-testid*="article-body"]',
+  '.article-body',
+  '.article-content',
+  '.story-body',
+  '.post-content',
+  '.entry-content',
+  '.article-content-wrap',
+  'main article',
+  '[role="main"] article',
+  'article',
+  'main',
+  '[role="main"]',
+  '#main-content',
+  '#content',
+  '.main-content',
+] as const;
+const ARTICLE_BYLINE_SELECTORS = [
+  '[itemprop="author"]',
+  '[rel="author"]',
+  '[data-testid*="author"]',
+  '.author-byline',
+  '.byline',
+  '.article-meta',
+] as const;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -172,6 +242,286 @@ function clampAudioRate(rate: number): number {
 
 function normalizeInlineText(value: string | null | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function isUrlOnlyLine(value: string): boolean {
+  const normalized = normalizeInlineText(value);
+  if (!normalized) return true;
+  if (!/[a-z]/i.test(normalized)) return true;
+  const withoutUrls = normalized
+    .replace(/https?:\/\/\S+/gi, '')
+    .replace(/www\.\S+/gi, '')
+    .replace(/\b[a-z0-9.-]+\.[a-z]{2,}(?:\/\S*)?\b/gi, '')
+    .replace(/[|•·\-–—:()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return withoutUrls.length === 0;
+}
+
+function hasLinkDenseText(element: Element, text: string): boolean {
+  const normalized = normalizeInlineText(text);
+  if (normalized.length < 40) return false;
+  const anchors = Array.from(element.querySelectorAll('a'));
+  if (anchors.length === 0) return false;
+  const linkText = normalizeInlineText(anchors.map((anchor) => anchor.textContent ?? '').join(' '));
+  if (!linkText) return false;
+  return linkText.length / Math.max(1, normalized.length) > 0.58;
+}
+
+function getNoiseMarkerText(element: Element): string {
+  return [
+    element.tagName,
+    element.id,
+    typeof element.className === 'string' ? element.className : '',
+    element.getAttribute('role') ?? '',
+    element.getAttribute('aria-label') ?? '',
+    element.getAttribute('data-testid') ?? '',
+    element.getAttribute('data-component') ?? '',
+    element.getAttribute('data-module') ?? '',
+  ]
+    .join(' ')
+    .toLowerCase();
+}
+
+function stripNoisyNodesFromDocument(doc: Document): void {
+  for (const selector of [
+    'script',
+    'style',
+    'noscript',
+    'iframe',
+    'svg',
+    'canvas',
+    'nav',
+    'aside',
+    'footer',
+    'form',
+    '[role="navigation"]',
+    '[role="complementary"]',
+    '[role="contentinfo"]',
+    '[aria-modal="true"]',
+    '[data-testid*="ad"]',
+    '[data-component*="ad"]',
+  ]) {
+    for (const node of Array.from(doc.querySelectorAll(selector))) {
+      node.remove();
+    }
+  }
+
+  const allElements = Array.from(doc.querySelectorAll('body *'));
+  for (const element of allElements) {
+    const marker = getNoiseMarkerText(element);
+    if (ARTICLE_NOISE_MARKER_PATTERN.test(marker)) {
+      element.remove();
+      continue;
+    }
+
+    const text = normalizeInlineText(element.textContent ?? '');
+    if (!text) continue;
+    const anchors = element.querySelectorAll('a').length;
+    if (anchors >= 8 && hasLinkDenseText(element, text) && text.length < 1_400) {
+      element.remove();
+    }
+  }
+}
+
+function normalizeHeadingLabel(value: string): string {
+  return normalizeInlineText(value).replace(/[.:]+$/g, '').toLowerCase();
+}
+
+function toMainArticleBlockType(tagName: string): { type: MainArticleBlockType; level?: number } | null {
+  const tag = tagName.toUpperCase();
+  if (tag === 'P') return { type: 'paragraph' };
+  if (tag === 'LI') return { type: 'list_item' };
+  if (tag === 'BLOCKQUOTE') return { type: 'quote' };
+  if (/^H[1-6]$/.test(tag)) {
+    return {
+      type: 'heading',
+      level: Number(tag.slice(1)),
+    };
+  }
+  return null;
+}
+
+function collectMainArticleBlocks(articleHtml: string): MainArticleBlock[] {
+  const parsed = document.implementation.createHTMLDocument('unity-main-article');
+  parsed.body.innerHTML = articleHtml;
+
+  const blocks: MainArticleBlock[] = [];
+  const dedupe = new Set<string>();
+
+  for (const element of Array.from(parsed.body.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote'))) {
+    const blockKind = toMainArticleBlockType(element.tagName);
+    if (!blockKind) continue;
+
+    const text = normalizeInlineText(element.textContent ?? '');
+    if (!text) continue;
+
+    if (blockKind.type === 'heading') {
+      if (ARTICLE_TERMINAL_HEADING_PATTERN.test(normalizeHeadingLabel(text))) break;
+      if (text.length < 2) continue;
+    } else {
+      if (text.length < 28) continue;
+      if (ARTICLE_LINE_NOISE_PATTERN.test(text.toLowerCase())) continue;
+    }
+
+    if (isUrlOnlyLine(text)) continue;
+    if (hasLinkDenseText(element, text) && text.length < 320) continue;
+
+    const key = text.toLowerCase();
+    if (dedupe.has(key)) continue;
+    dedupe.add(key);
+
+    blocks.push({
+      id: `ab-${blocks.length + 1}`,
+      type: blockKind.type,
+      text,
+      ...(typeof blockKind.level === 'number' ? { level: blockKind.level } : {}),
+    });
+  }
+
+  return blocks;
+}
+
+function buildMainArticleText(blocks: MainArticleBlock[]): string {
+  return blocks
+    .filter((block) => block.type !== 'heading')
+    .map((block) => normalizeInlineText(block.text))
+    .filter((line) => line.length > 0)
+    .join('\n');
+}
+
+function meetsStrictArticleThresholds(blocks: MainArticleBlock[], text: string): boolean {
+  const bodyBlocks = blocks.filter((block) => block.type !== 'heading');
+  return bodyBlocks.length >= ARTICLE_MIN_BODY_BLOCKS && text.length >= ARTICLE_MIN_TEXT_CHARS;
+}
+
+function findBylineInRoot(root: ParentNode): string | undefined {
+  for (const selector of ARTICLE_BYLINE_SELECTORS) {
+    const element = root.querySelector(selector);
+    const text = normalizeInlineText(element?.textContent ?? '');
+    if (text.length >= 4 && text.length <= 220) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+function computeRootLinkDensity(root: Element): number {
+  const totalText = normalizeInlineText(root.textContent ?? '');
+  if (!totalText) return 0;
+  const linkText = normalizeInlineText(
+    Array.from(root.querySelectorAll('a'))
+      .map((anchor) => anchor.textContent ?? '')
+      .join(' '),
+  );
+  if (!linkText) return 0;
+  return linkText.length / Math.max(1, totalText.length);
+}
+
+function extractMainArticleFromCandidateRoots(): MainArticleResponseOk | null {
+  const seen = new Set<Element>();
+  let best: {
+    score: number;
+    blocks: MainArticleBlock[];
+    text: string;
+    title: string;
+    byline?: string;
+  } | null = null;
+
+  for (const selector of ARTICLE_ROOT_SELECTORS) {
+    for (const root of Array.from(document.querySelectorAll(selector))) {
+      if (seen.has(root)) continue;
+      seen.add(root);
+
+      const html = root.innerHTML;
+      if (!html || html.length < 180) continue;
+
+      const blocks = collectMainArticleBlocks(html);
+      const text = buildMainArticleText(blocks);
+      if (!meetsStrictArticleThresholds(blocks, text)) continue;
+
+      const linkDensity = computeRootLinkDensity(root);
+      const marker = getNoiseMarkerText(root);
+      const markerBonus =
+        /\b(article-body|article-content|story-body|entry-content|post-content)\b/.test(marker)
+          ? 1800
+          : root.tagName === 'ARTICLE'
+            ? 1200
+            : /\barticle\b/.test(marker)
+              ? 700
+              : 0;
+      const markerPenalty =
+        /\b(recommended|related|carousel|sidebar|nav|menu|footer|comment)\b/.test(marker)
+          ? 2200
+          : 0;
+      const score = text.length + blocks.length * 70 - Math.round(linkDensity * 2000) + markerBonus - markerPenalty;
+
+      const headingBlock = blocks.find((block) => block.type === 'heading' && block.level === 1);
+      const rootHeading = normalizeInlineText(root.querySelector('h1,h2')?.textContent ?? '');
+      const title = headingBlock?.text || rootHeading || normalizeInlineText(document.title) || 'Untitled article';
+      const byline = findBylineInRoot(root);
+
+      if (!best || score > best.score) {
+        best = { score, blocks, text, title, ...(byline ? { byline } : {}) };
+      }
+    }
+  }
+
+  if (!best) return null;
+  return {
+    ok: true,
+    url: location.href,
+    title: document.title,
+    article: {
+      source: 'readability',
+      articleTitle: best.title,
+      ...(best.byline ? { byline: best.byline } : {}),
+      text: best.text,
+      blocks: best.blocks,
+      charCount: best.text.length,
+      extractedAt: new Date().toISOString(),
+    },
+  };
+}
+
+function extractMainArticleFromDocument(): MainArticleResponseOk | MainArticleResponseError {
+  const cloned = document.cloneNode(true) as Document;
+  stripNoisyNodesFromDocument(cloned);
+
+  const reader = new Readability(cloned, {
+    charThreshold: 120,
+    nbTopCandidates: 8,
+    keepClasses: false,
+  });
+  const parsed = reader.parse();
+  if (parsed?.content) {
+    const blocks = collectMainArticleBlocks(parsed.content);
+    const articleText = buildMainArticleText(blocks);
+    if (meetsStrictArticleThresholds(blocks, articleText)) {
+      return {
+        ok: true,
+        url: location.href,
+        title: document.title,
+        article: {
+          source: 'readability',
+          articleTitle: normalizeInlineText(parsed.title) || normalizeInlineText(document.title) || 'Untitled article',
+          ...(normalizeInlineText(parsed.byline) ? { byline: normalizeInlineText(parsed.byline) } : {}),
+          text: articleText,
+          blocks,
+          charCount: articleText.length,
+          extractedAt: new Date().toISOString(),
+        },
+      };
+    }
+  }
+
+  const rootedFallback = extractMainArticleFromCandidateRoots();
+  if (rootedFallback) return rootedFallback;
+
+  return {
+    ok: false,
+    error: 'Main article extraction was too weak; this page does not look like a readable article.',
+  };
 }
 
 function normalizeFieldSignal(value: string | null | undefined): string {
@@ -1056,6 +1406,116 @@ function installStyles() {
   document.documentElement.appendChild(style);
 }
 
+function installPageReaderStyles() {
+  if (document.getElementById(PAGE_READER_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = PAGE_READER_STYLE_ID;
+  style.textContent = `
+    body[${PAGE_READER_MODE_ATTR}="true"] {
+      background: #ffffff !important;
+      color: #161312 !important;
+    }
+    body[${PAGE_READER_MODE_ATTR}="true"] > :not(#${PAGE_READER_ROOT_ID}):not(script):not(style) {
+      display: none !important;
+    }
+    #${PAGE_READER_ROOT_ID} {
+      min-height: 100vh;
+      background: #ffffff;
+      color: #161312;
+      font-family: "Georgia", "Times New Roman", serif;
+      line-height: 1.62;
+    }
+    #${PAGE_READER_ROOT_ID} .unity-pr-shell {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 42px 24px 72px;
+    }
+    #${PAGE_READER_ROOT_ID} .unity-pr-head {
+      border-bottom: 1px solid rgba(32, 24, 16, 0.12);
+      padding-bottom: 16px;
+      margin-bottom: 22px;
+    }
+    #${PAGE_READER_ROOT_ID} .unity-pr-title {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 38px);
+      line-height: 1.2;
+      letter-spacing: -0.01em;
+      color: #1a120e;
+    }
+    #${PAGE_READER_ROOT_ID} .unity-pr-byline {
+      margin: 10px 0 0;
+      font: 600 14px/1.4 "DM Sans", system-ui, sans-serif;
+      color: #6e5f54;
+      letter-spacing: 0.01em;
+    }
+    #${PAGE_READER_ROOT_ID} .unity-pr-exit {
+      margin-top: 14px;
+      border: 1px solid #d2c4b8;
+      border-radius: 999px;
+      background: #fffdfa;
+      color: #38291f;
+      font: 600 12px/1 "DM Sans", system-ui, sans-serif;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    #${PAGE_READER_ROOT_ID} .unity-pr-exit:hover {
+      border-color: #b78f6f;
+      color: #7a3c13;
+    }
+    #${PAGE_READER_ROOT_ID} .unity-pr-body {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      font-size: 21px;
+    }
+    #${PAGE_READER_ROOT_ID} .unity-pr-body p,
+    #${PAGE_READER_ROOT_ID} .unity-pr-body blockquote,
+    #${PAGE_READER_ROOT_ID} .unity-pr-body ul {
+      margin: 0;
+    }
+    #${PAGE_READER_ROOT_ID} .unity-pr-body h1,
+    #${PAGE_READER_ROOT_ID} .unity-pr-body h2,
+    #${PAGE_READER_ROOT_ID} .unity-pr-body h3,
+    #${PAGE_READER_ROOT_ID} .unity-pr-body h4,
+    #${PAGE_READER_ROOT_ID} .unity-pr-body h5,
+    #${PAGE_READER_ROOT_ID} .unity-pr-body h6 {
+      margin: 16px 0 2px;
+      line-height: 1.28;
+      color: #1f1712;
+      font-family: "DM Sans", system-ui, sans-serif;
+    }
+    #${PAGE_READER_ROOT_ID} .unity-pr-body h1 { font-size: 31px; }
+    #${PAGE_READER_ROOT_ID} .unity-pr-body h2 { font-size: 27px; }
+    #${PAGE_READER_ROOT_ID} .unity-pr-body h3 { font-size: 24px; }
+    #${PAGE_READER_ROOT_ID} .unity-pr-body h4,
+    #${PAGE_READER_ROOT_ID} .unity-pr-body h5,
+    #${PAGE_READER_ROOT_ID} .unity-pr-body h6 { font-size: 21px; }
+    #${PAGE_READER_ROOT_ID} .unity-pr-body blockquote {
+      border-left: 3px solid rgba(164, 118, 81, 0.55);
+      padding-left: 12px;
+      color: #514137;
+      font-style: italic;
+    }
+    #${PAGE_READER_ROOT_ID} .unity-pr-body ul {
+      padding-left: 22px;
+      display: grid;
+      gap: 8px;
+    }
+    #${PAGE_READER_ROOT_ID} .unity-pr-body li {
+      margin: 0;
+    }
+    @media (max-width: 760px) {
+      #${PAGE_READER_ROOT_ID} .unity-pr-shell {
+        padding: 24px 18px 56px;
+      }
+      #${PAGE_READER_ROOT_ID} .unity-pr-body {
+        font-size: 19px;
+      }
+    }
+  `;
+  document.documentElement.appendChild(style);
+}
+
 function installPageColorBlindStyles() {
   if (document.getElementById(PAGE_STYLE_ID)) return;
   const style = document.createElement('style');
@@ -1602,6 +2062,7 @@ export default defineContentScript({
   main() {
     installAttachShadowHook();
     installStyles();
+    installPageReaderStyles();
     installPageColorBlindStyles();
     installPageReducedMotionStyles();
     installForcedFontStyles();
@@ -1646,6 +2107,140 @@ export default defineContentScript({
     let forcedFontRescanInterval: number | null = null;
     let reduceMotionRescanInterval: number | null = null;
     let canvasPlaceholderCounter = 0;
+    let readerModeRoot: HTMLElement | null = null;
+    let readerModeEnabled = false;
+
+    const getReaderModeEnabled = (): boolean =>
+      readerModeEnabled &&
+      Boolean(readerModeRoot?.isConnected) &&
+      document.body?.getAttribute(PAGE_READER_MODE_ATTR) === 'true';
+
+    const setReaderModeEnabled = (enabled: boolean) => {
+      readerModeEnabled = enabled;
+      if (!document.body) return;
+      if (enabled) {
+        document.body.setAttribute(PAGE_READER_MODE_ATTR, 'true');
+      } else {
+        document.body.removeAttribute(PAGE_READER_MODE_ATTR);
+      }
+    };
+
+    const renderReaderModeContent = (article: MainArticleContent): HTMLElement => {
+      const root = document.createElement('section');
+      root.id = PAGE_READER_ROOT_ID;
+      root.setAttribute(MOTION_EXEMPT_ATTR, 'true');
+      root.setAttribute(UI_ATTR, 'true');
+      root.innerHTML = `
+        <div class="unity-pr-shell">
+          <header class="unity-pr-head">
+            <h1 class="unity-pr-title"></h1>
+            <p class="unity-pr-byline"></p>
+            <button type="button" class="unity-pr-exit">Exit Reader Mode</button>
+          </header>
+          <article class="unity-pr-body"></article>
+        </div>
+      `;
+
+      const titleNode = root.querySelector<HTMLElement>('.unity-pr-title');
+      if (titleNode) {
+        titleNode.textContent = article.articleTitle || document.title || 'Article';
+      }
+      const bylineNode = root.querySelector<HTMLElement>('.unity-pr-byline');
+      if (bylineNode) {
+        const bylineText = normalizeInlineText(article.byline);
+        if (bylineText) {
+          bylineNode.textContent = bylineText;
+        } else {
+          bylineNode.remove();
+        }
+      }
+
+      const body = root.querySelector<HTMLElement>('.unity-pr-body');
+      if (body) {
+        let list: HTMLUListElement | null = null;
+        for (const block of article.blocks) {
+          if (block.type === 'list_item') {
+            if (!list) {
+              list = document.createElement('ul');
+              body.appendChild(list);
+            }
+            const li = document.createElement('li');
+            li.textContent = block.text;
+            list.appendChild(li);
+            continue;
+          }
+
+          list = null;
+          let element: HTMLElement;
+          if (block.type === 'heading') {
+            const rawLevel = Number(block.level);
+            const level = Number.isFinite(rawLevel) ? Math.max(1, Math.min(6, Math.round(rawLevel))) : 2;
+            element = document.createElement(`h${level}`);
+          } else if (block.type === 'quote') {
+            element = document.createElement('blockquote');
+          } else {
+            element = document.createElement('p');
+          }
+          element.textContent = block.text;
+          body.appendChild(element);
+        }
+      }
+
+      root.querySelector<HTMLButtonElement>('.unity-pr-exit')?.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (readerModeRoot?.isConnected) {
+          readerModeRoot.remove();
+        }
+        readerModeRoot = null;
+        setReaderModeEnabled(false);
+      });
+
+      return root;
+    };
+
+    const enableReaderMode = (): ReaderModeResponse => {
+      if (!document.body) {
+        return { ok: false, enabled: false, error: 'Page is still loading. Try again in a moment.' };
+      }
+
+      const extraction = extractMainArticleFromDocument();
+      if (!extraction.ok) {
+        return { ok: false, enabled: false, error: extraction.error };
+      }
+
+      if (readerModeRoot?.isConnected) {
+        readerModeRoot.remove();
+        readerModeRoot = null;
+      }
+
+      hideAllUi();
+      stopAudioPlayback(true);
+      readerModeRoot = renderReaderModeContent(extraction.article);
+      document.body.appendChild(readerModeRoot);
+      setReaderModeEnabled(true);
+
+      return {
+        ok: true,
+        enabled: true,
+        articleTitle: extraction.article.articleTitle,
+        charCount: extraction.article.charCount,
+      };
+    };
+
+    const disableReaderMode = (): ReaderModeResponse => {
+      if (readerModeRoot?.isConnected) {
+        readerModeRoot.remove();
+      }
+      readerModeRoot = null;
+      setReaderModeEnabled(false);
+      return { ok: true, enabled: false };
+    };
+
+    readerModeRoot = document.getElementById(PAGE_READER_ROOT_ID) as HTMLElement | null;
+    readerModeEnabled =
+      Boolean(readerModeRoot?.isConnected) &&
+      document.body?.getAttribute(PAGE_READER_MODE_ATTR) === 'true';
 
     const applyColorBlindModeToUi = () => {
       if (actionBar) {
@@ -2909,6 +3504,10 @@ export default defineContentScript({
         return;
       }
       if (
+        message.type !== 'ARTICLE_EXTRACT_MAIN' &&
+        message.type !== 'ARTICLE_ENABLE_READER_MODE' &&
+        message.type !== 'ARTICLE_DISABLE_READER_MODE' &&
+        message.type !== 'ARTICLE_GET_READER_MODE_STATE' &&
         message.type !== 'FORM_SCAN_FIELDS' &&
         message.type !== 'FORM_FILL_FIELDS' &&
         message.type !== 'FORM_UNDO_FILL' &&
@@ -2917,10 +3516,28 @@ export default defineContentScript({
       ) {
         return;
       }
+      if ((message.type as string).startsWith('ARTICLE_') && window.top !== window) {
+        return;
+      }
 
       void (async () => {
         try {
           switch (message.type) {
+            case 'ARTICLE_EXTRACT_MAIN':
+              sendResponse(extractMainArticleFromDocument());
+              return;
+            case 'ARTICLE_ENABLE_READER_MODE':
+              sendResponse(enableReaderMode());
+              return;
+            case 'ARTICLE_DISABLE_READER_MODE':
+              sendResponse(disableReaderMode());
+              return;
+            case 'ARTICLE_GET_READER_MODE_STATE':
+              sendResponse({
+                ok: true,
+                enabled: getReaderModeEnabled(),
+              } satisfies ReaderModeResponse);
+              return;
             case 'FORM_SCAN_FIELDS':
               sendResponse({
                 ok: true,
@@ -2988,11 +3605,22 @@ export default defineContentScript({
           }
         } catch (error) {
           if (
+            message.type === 'ARTICLE_EXTRACT_MAIN' ||
+            message.type === 'ARTICLE_ENABLE_READER_MODE' ||
+            message.type === 'ARTICLE_DISABLE_READER_MODE' ||
+            message.type === 'ARTICLE_GET_READER_MODE_STATE' ||
             message.type === 'FORM_SCAN_FIELDS' ||
             message.type === 'FORM_FILL_FIELDS' ||
             message.type === 'FORM_UNDO_FILL' ||
             message.type === 'FORM_GET_UNDO_STATUS'
           ) {
+            if ((message.type as string).startsWith('ARTICLE_')) {
+              sendResponse({
+                ok: false,
+                error: error instanceof Error ? error.message : 'Reader mode command failed.',
+              });
+              return;
+            }
             sendResponse({
               ok: false,
               error:
