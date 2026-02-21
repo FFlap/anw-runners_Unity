@@ -6,6 +6,13 @@ import type {
   SourceSnippet,
   TranscriptSegment,
 } from '@/lib/types';
+import {
+  DICTATION_SILENCE_TIMEOUT_MS,
+  dictationErrorMessage,
+  getDictationRecognitionCtor,
+  insertDictationText,
+  type DictationRecognitionLike,
+} from '@/lib/dictation';
 
 const PANEL_ID = 'unity-youtube-chat-root';
 const STYLE_ID = 'unity-youtube-chat-style';
@@ -100,6 +107,45 @@ function createRefreshIcon(spinning: boolean): SVGSVGElement {
   pathD.setAttribute('d', 'M3 12a9 9 0 0 0 15 6.7L21 16');
 
   svg.append(pathA, pathB, pathC, pathD);
+  return svg;
+}
+
+function createMicIcon(active: boolean): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.classList.add('unity-btn-icon');
+
+  const body = document.createElementNS(ns, 'rect');
+  body.setAttribute('x', '9');
+  body.setAttribute('y', '2');
+  body.setAttribute('width', '6');
+  body.setAttribute('height', '11');
+  body.setAttribute('rx', '3');
+
+  const stem = document.createElementNS(ns, 'path');
+  stem.setAttribute('d', 'M12 19v3');
+
+  const base = document.createElementNS(ns, 'path');
+  base.setAttribute('d', 'M8 22h8');
+
+  const arc = document.createElementNS(ns, 'path');
+  arc.setAttribute('d', 'M19 10v2a7 7 0 0 1-14 0v-2');
+
+  svg.append(body, stem, base, arc);
+
+  if (active) {
+    const slash = document.createElementNS(ns, 'path');
+    slash.setAttribute('d', 'M4 4l16 16');
+    svg.appendChild(slash);
+  }
+
   return svg;
 }
 
@@ -300,8 +346,22 @@ function installStyles() {
     #${PANEL_ID} .unity-compose-actions {
       margin-top: 7px;
       display: flex;
+      align-items: center;
       justify-content: flex-end;
       gap: 6px;
+    }
+    #${PANEL_ID} .unity-btn--dictation {
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #${PANEL_ID} .unity-btn--dictation[data-active="true"] {
+      border-color: #b86a2e;
+      background: #fbe9d3;
+      color: #9d4f16;
     }
     #${PANEL_ID} .unity-error {
       margin: 0;
@@ -482,6 +542,11 @@ export default defineContentScript({
     let question = '';
     let isAsking = false;
     let localError: string | null = null;
+    let dictationSupported = false;
+    let dictationActive = false;
+    let dictation: DictationRecognitionLike | null = null;
+    let dictationSilenceTimer: number | null = null;
+    let pendingDictationTranscript = '';
 
     let transcriptSegments: TranscriptSegment[] = [];
     let transcriptLoading = false;
@@ -509,12 +574,17 @@ export default defineContentScript({
       transcriptResolved ? '1' : '0',
       transcriptError ?? '',
       isAsking ? '1' : '0',
+      dictationSupported ? '1' : '0',
+      dictationActive ? '1' : '0',
       localError ?? '',
       question,
     ].join('|');
 
     const ensurePanelMounted = () => {
       if (!isWatchUrl(location.href)) {
+        if (dictationActive) {
+          stopDictation();
+        }
         panelRoot?.remove();
         panelRoot = null;
         return;
@@ -653,6 +723,146 @@ export default defineContentScript({
     const captureComposerSelection = (input: HTMLTextAreaElement) => {
       composerSelectionStart = input.selectionStart ?? question.length;
       composerSelectionEnd = input.selectionEnd ?? composerSelectionStart;
+    };
+
+    const clearDictationSilenceTimer = () => {
+      if (dictationSilenceTimer == null) return;
+      window.clearTimeout(dictationSilenceTimer);
+      dictationSilenceTimer = null;
+    };
+
+    const scheduleDictationSilenceStop = () => {
+      clearDictationSilenceTimer();
+      dictationSilenceTimer = window.setTimeout(() => {
+        dictationSilenceTimer = null;
+        if (!dictationActive) return;
+        stopDictation();
+      }, DICTATION_SILENCE_TIMEOUT_MS);
+    };
+
+    const stopDictation = () => {
+      clearDictationSilenceTimer();
+      if (!dictation) return;
+      try {
+        dictation.stop();
+      } catch {
+        // Recognition can already be stopped.
+      }
+    };
+
+    const insertDictatedQuestionText = (transcript: string) => {
+      const input = panelRoot?.querySelector<HTMLTextAreaElement>('[data-testid="unity-composer-input"]');
+      if (input) {
+        captureComposerSelection(input);
+      }
+      const next = insertDictationText(question, transcript, composerSelectionStart, composerSelectionEnd);
+      question = next.value;
+      composerSelectionStart = next.cursor;
+      composerSelectionEnd = next.cursor;
+      composerFocused = true;
+    };
+
+    const initializeDictation = () => {
+      const DictationCtor = getDictationRecognitionCtor(window);
+      if (!DictationCtor) {
+        dictationSupported = false;
+        dictation = null;
+        dictationActive = false;
+        return;
+      }
+
+      dictationSupported = true;
+      let recognition: DictationRecognitionLike;
+      try {
+        recognition = new DictationCtor();
+      } catch {
+        dictationSupported = false;
+        dictation = null;
+        dictationActive = false;
+        return;
+      }
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = navigator.language || 'en-US';
+
+      recognition.onstart = () => {
+        pendingDictationTranscript = '';
+        dictationActive = true;
+        localError = null;
+        scheduleDictationSilenceStop();
+        render();
+      };
+
+      recognition.onend = () => {
+        if (pendingDictationTranscript.trim()) {
+          insertDictatedQuestionText(pendingDictationTranscript);
+        }
+        pendingDictationTranscript = '';
+        dictationActive = false;
+        clearDictationSilenceTimer();
+        render();
+      };
+
+      recognition.onerror = (event) => {
+        pendingDictationTranscript = '';
+        dictationActive = false;
+        clearDictationSilenceTimer();
+        if (event.error && event.error !== 'aborted') {
+          localError = dictationErrorMessage(event.error);
+        }
+        render();
+      };
+
+      recognition.onspeechstart = () => {
+        clearDictationSilenceTimer();
+      };
+
+      recognition.onspeechend = () => {
+        scheduleDictationSilenceStop();
+      };
+
+      recognition.onresult = (event) => {
+        let finalTranscript = '';
+        let interimTranscript = '';
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+          const result = event.results[index];
+          const transcript = result?.[0]?.transcript ?? '';
+          if (!transcript.trim()) continue;
+          if (result.isFinal) {
+            finalTranscript += transcript;
+          } else {
+            interimTranscript += transcript;
+          }
+        }
+        if (finalTranscript.trim()) {
+          pendingDictationTranscript = '';
+          insertDictatedQuestionText(finalTranscript);
+          scheduleDictationSilenceStop();
+          render();
+          return;
+        }
+        pendingDictationTranscript = interimTranscript.trim();
+        if (pendingDictationTranscript) {
+          scheduleDictationSilenceStop();
+        }
+      };
+
+      dictation = recognition;
+    };
+
+    const disposeDictation = () => {
+      if (!dictation) return;
+      stopDictation();
+      dictation.onstart = null;
+      dictation.onend = null;
+      dictation.onerror = null;
+      dictation.onresult = null;
+      dictation.onspeechstart = null;
+      dictation.onspeechend = null;
+      dictation = null;
+      dictationActive = false;
+      pendingDictationTranscript = '';
+      clearDictationSilenceTimer();
     };
 
     const render = () => {
@@ -821,6 +1031,9 @@ export default defineContentScript({
       compose.addEventListener('submit', (event) => {
         event.preventDefault();
         if (isAsking || !question.trim()) return;
+        if (dictationActive) {
+          stopDictation();
+        }
 
         void (async () => {
           isAsking = true;
@@ -858,6 +1071,7 @@ export default defineContentScript({
       input.value = question;
       input.placeholder = 'Ask a grounded question about this video...';
       input.disabled = isAsking;
+      input.setAttribute('data-testid', 'unity-composer-input');
       let askButton: HTMLButtonElement | null = null;
       const syncAskButtonState = () => {
         if (!askButton) return;
@@ -888,12 +1102,41 @@ export default defineContentScript({
       const composeActions = document.createElement('div');
       composeActions.className = 'unity-compose-actions';
 
+      const dictationButton = document.createElement('button');
+      dictationButton.type = 'button';
+      dictationButton.className = 'unity-btn unity-btn--dictation';
+      dictationButton.dataset.active = String(dictationActive);
+      const dictationTitle = !dictationSupported
+        ? 'Voice dictation is unavailable in this browser.'
+        : dictationActive
+          ? 'Stop voice dictation'
+          : 'Start voice dictation';
+      dictationButton.title = dictationTitle;
+      dictationButton.setAttribute('aria-label', dictationTitle);
+      dictationButton.disabled = isAsking || !dictationSupported;
+      dictationButton.appendChild(createMicIcon(dictationActive));
+      dictationButton.addEventListener('click', () => {
+        if (!dictation || !dictationSupported) return;
+        localError = null;
+        try {
+          if (dictationActive) {
+            dictation.stop();
+          } else {
+            dictation.start();
+          }
+        } catch (error) {
+          dictationActive = false;
+          localError = error instanceof Error ? error.message : dictationErrorMessage();
+          render();
+        }
+      });
+
       askButton = document.createElement('button');
       askButton.type = 'submit';
       askButton.className = 'unity-btn';
       askButton.textContent = isAsking ? 'Asking...' : 'Ask';
       syncAskButtonState();
-      composeActions.appendChild(askButton);
+      composeActions.append(dictationButton, askButton);
 
       compose.append(input, composeActions);
       body.appendChild(compose);
@@ -1077,6 +1320,7 @@ export default defineContentScript({
 
     ext.runtime.onMessage.addListener(onMessage as any);
 
+    initializeDictation();
     ensurePanelMounted();
     syncVideoListener();
     render();
@@ -1097,6 +1341,9 @@ export default defineContentScript({
     const urlTimer = window.setInterval(() => {
       if (location.href !== currentUrl) {
         currentUrl = location.href;
+        if (dictationActive) {
+          stopDictation();
+        }
 
         if (!isWatchUrl(currentUrl)) {
           if (watchedVideo) {
@@ -1121,6 +1368,7 @@ export default defineContentScript({
         question = '';
         isAsking = false;
         localError = null;
+        dictationActive = false;
 
         transcriptSegments = [];
         transcriptLoading = false;
@@ -1148,6 +1396,7 @@ export default defineContentScript({
     window.addEventListener('beforeunload', () => {
       window.clearInterval(pollTimer);
       window.clearInterval(urlTimer);
+      disposeDictation();
       if (watchedVideo) {
         watchedVideo.removeEventListener('timeupdate', onVideoTimelineUpdate);
         watchedVideo.removeEventListener('seeking', onVideoTimelineUpdate);

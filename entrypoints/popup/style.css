@@ -288,6 +288,23 @@ input {
   justify-content: space-between;
 }
 
+.composer-submit-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.voice-btn {
+  width: 32px;
+  height: 32px;
+}
+
+.voice-btn--active {
+  border-color: var(--unity-accent);
+  background: #fbe6d8;
+  color: var(--unity-accent-strong);
+}
+
 .error-text {
   margin: 8px 14px 0;
   color: var(--unity-danger);

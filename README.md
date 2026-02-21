@@ -27,6 +27,9 @@ npm run dev:stable
 ```
 
 3. Add your OpenRouter API key in Unity settings inside the popup.
+4. Ensure microphone permissions are set to **Allow** for voice dictation:
+   - `chrome-extension://<your-extension-id>` for popup voice input.
+   - `youtube.com` for in-page YouTube voice input.
 
 ## Build
 
@@ -38,3 +41,4 @@ npm run build
 
 - Answers are intentionally constrained to tab-local context.
 - If context is insufficient, Unity returns an insufficient-evidence style answer instead of fabricating details.
+- Voice dictation requires microphone permission set to **Allow**.

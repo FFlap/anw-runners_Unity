@@ -1,5 +1,5 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { LoaderCircle, RotateCcw, Send, Settings, Trash2 } from 'lucide-react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LoaderCircle, Mic, MicOff, RotateCcw, Send, Settings, Trash2 } from 'lucide-react';
 import type {
   ChatMessage,
   ChatSession,
@@ -8,6 +8,13 @@ import type {
   ScanStatus,
   SourceSnippet,
 } from '@/lib/types';
+import {
+  DICTATION_SILENCE_TIMEOUT_MS,
+  dictationErrorMessage,
+  getDictationRecognitionCtor,
+  insertDictationText,
+  type DictationRecognitionLike,
+} from '@/lib/dictation';
 
 const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeof browser;
 const API_KEY_STORAGE_KEY = 'openrouter_api_key';
@@ -24,6 +31,42 @@ type AskResponse = {
 };
 
 const runningStates = new Set<ScanStatus['state']>(['extracting', 'analyzing', 'highlighting']);
+
+async function getPopupMicrophonePermissionState(): Promise<PermissionState | 'unknown'> {
+  if (!('permissions' in navigator) || typeof navigator.permissions?.query !== 'function') {
+    return 'unknown';
+  }
+
+  try {
+    const status = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+    return status.state;
+  } catch {
+    return 'unknown';
+  }
+}
+
+async function requestPopupMicrophoneAccess(): Promise<{ ok: boolean; error?: string }> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return { ok: false, error: 'Microphone API is unavailable in this browser.' };
+  }
+
+  let stream: MediaStream | null = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    return { ok: true };
+  } catch (error) {
+    const code = error instanceof DOMException ? error.name : undefined;
+    if (code === 'NotAllowedError' || code === 'PermissionDeniedError') {
+      return { ok: false, error: 'Microphone permission was denied.' };
+    }
+    if (code === 'NotFoundError' || code === 'DevicesNotFoundError') {
+      return { ok: false, error: 'No microphone device was found.' };
+    }
+    return { ok: false, error: 'Microphone permission request failed.' };
+  } finally {
+    stream?.getTracks().forEach((track) => track.stop());
+  }
+}
 
 async function sendMessage<T>(message: RuntimeRequest): Promise<T> {
   let lastError: unknown;
@@ -190,6 +233,15 @@ function App() {
   const [isAsking, setIsAsking] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dictationSupported, setDictationSupported] = useState(false);
+  const [isDictating, setIsDictating] = useState(false);
+  const [isRequestingMic, setIsRequestingMic] = useState(false);
+
+  const recognitionRef = useRef<DictationRecognitionLike | null>(null);
+  const dictationActiveRef = useRef(false);
+  const silenceTimerRef = useRef<number | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const pendingCursorRef = useRef<number | null>(null);
 
   const refreshTabData = useCallback(async (tabId: number) => {
     const [nextStatus, reportResponse, sessionResponse] = await Promise.all([
@@ -260,6 +312,169 @@ function App() {
     return () => window.clearInterval(timer);
   }, [activeTabId, refreshTabData]);
 
+  useEffect(() => {
+    const RecognitionCtor = getDictationRecognitionCtor();
+    if (!RecognitionCtor) {
+      setDictationSupported(false);
+      return;
+    }
+
+    let recognition: DictationRecognitionLike;
+    try {
+      recognition = new RecognitionCtor();
+    } catch {
+      setDictationSupported(false);
+      return;
+    }
+
+    setDictationSupported(true);
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = navigator.language || 'en-US';
+    let pendingTranscript = '';
+
+    const clearSilenceTimer = () => {
+      if (silenceTimerRef.current == null) return;
+      window.clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    };
+
+    const scheduleSilenceStop = () => {
+      clearSilenceTimer();
+      silenceTimerRef.current = window.setTimeout(() => {
+        silenceTimerRef.current = null;
+        if (!dictationActiveRef.current) return;
+        try {
+          recognition.stop();
+        } catch {
+          // Recognition can already be stopped.
+        }
+      }, DICTATION_SILENCE_TIMEOUT_MS);
+    };
+
+    recognition.onstart = () => {
+      pendingTranscript = '';
+      dictationActiveRef.current = true;
+      setIsDictating(true);
+      scheduleSilenceStop();
+    };
+
+    recognition.onend = () => {
+      if (pendingTranscript.trim()) {
+        setQuestion((previous) => {
+          const input = textareaRef.current;
+          const selectionStart = input?.selectionStart ?? previous.length;
+          const selectionEnd = input?.selectionEnd ?? selectionStart;
+          const next = insertDictationText(previous, pendingTranscript, selectionStart, selectionEnd);
+          pendingCursorRef.current = next.cursor;
+          return next.value;
+        });
+      }
+      pendingTranscript = '';
+      dictationActiveRef.current = false;
+      setIsDictating(false);
+      clearSilenceTimer();
+    };
+
+    recognition.onerror = (event) => {
+      pendingTranscript = '';
+      dictationActiveRef.current = false;
+      setIsDictating(false);
+      clearSilenceTimer();
+      if (event.error && event.error !== 'aborted') {
+        setError(dictationErrorMessage(event.error));
+      }
+    };
+
+    recognition.onspeechstart = () => {
+      clearSilenceTimer();
+    };
+
+    recognition.onspeechend = () => {
+      scheduleSilenceStop();
+    };
+
+    recognition.onresult = (event) => {
+      let finalTranscript = '';
+      let interimTranscript = '';
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const transcript = result?.[0]?.transcript ?? '';
+        if (!transcript.trim()) continue;
+        if (result.isFinal) {
+          finalTranscript += transcript;
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      if (finalTranscript.trim()) {
+        pendingTranscript = '';
+        setQuestion((previous) => {
+          const input = textareaRef.current;
+          const selectionStart = input?.selectionStart ?? previous.length;
+          const selectionEnd = input?.selectionEnd ?? selectionStart;
+          const next = insertDictationText(previous, finalTranscript, selectionStart, selectionEnd);
+          pendingCursorRef.current = next.cursor;
+          return next.value;
+        });
+        scheduleSilenceStop();
+        return;
+      }
+
+      pendingTranscript = interimTranscript.trim();
+      if (pendingTranscript) {
+        scheduleSilenceStop();
+      }
+    };
+
+    recognitionRef.current = recognition;
+
+    return () => {
+      try {
+        recognition.stop();
+      } catch {
+        // Recognition can already be stopped.
+      }
+      clearSilenceTimer();
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onstart = null;
+      recognition.onend = null;
+      recognition.onspeechstart = null;
+      recognition.onspeechend = null;
+      recognitionRef.current = null;
+      dictationActiveRef.current = false;
+      setIsDictating(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    const pendingCursor = pendingCursorRef.current;
+    if (pendingCursor == null) return;
+    const input = textareaRef.current;
+    if (!input) return;
+
+    window.requestAnimationFrame(() => {
+      const activeInput = textareaRef.current;
+      if (!activeInput) return;
+      const cursor = Math.max(0, Math.min(pendingCursor, activeInput.value.length));
+      activeInput.focus();
+      activeInput.setSelectionRange(cursor, cursor);
+      pendingCursorRef.current = null;
+    });
+  }, [question]);
+
+  useEffect(() => {
+    if (hasApiKey && activeTabId != null && !isAsking) return;
+    if (!dictationActiveRef.current) return;
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      // Recognition can already be stopped.
+    }
+  }, [activeTabId, hasApiKey, isAsking]);
+
   const startScan = useCallback(async () => {
     if (activeTabId == null) return;
     setError(null);
@@ -286,6 +501,14 @@ function App() {
     event.preventDefault();
     if (activeTabId == null || !question.trim()) return;
 
+    if (dictationActiveRef.current) {
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        // Recognition can already be stopped.
+      }
+    }
+
     setError(null);
     setIsAsking(true);
 
@@ -310,6 +533,44 @@ function App() {
     }
   }, [activeTabId, question, refreshTabData]);
 
+  const toggleDictation = useCallback(async () => {
+    const recognition = recognitionRef.current;
+    if (!recognition || !dictationSupported) return;
+
+    setError(null);
+    try {
+      if (dictationActiveRef.current) {
+        recognition.stop();
+      } else {
+        // Trigger microphone permission directly from the click path.
+        const permissionRequest = requestPopupMicrophoneAccess();
+        setIsRequestingMic(true);
+        let permissionResult: { ok: boolean; error?: string };
+        try {
+          permissionResult = await permissionRequest;
+        } finally {
+          setIsRequestingMic(false);
+        }
+
+        if (!permissionResult.ok) {
+          const currentState = await getPopupMicrophonePermissionState();
+          if (currentState === 'denied') {
+            setError('Popup microphone is blocked. Allow mic for this extension in Chrome site settings.');
+          } else {
+            setError(permissionResult.error ?? 'Microphone permission is required for popup dictation.');
+          }
+          return;
+        }
+
+        recognition.start();
+      }
+    } catch (dictationError) {
+      setError(dictationError instanceof Error ? dictationError.message : dictationErrorMessage());
+      dictationActiveRef.current = false;
+      setIsDictating(false);
+    }
+  }, [dictationSupported]);
+
   const jumpToSource = useCallback(async (source: SourceSnippet) => {
     if (activeTabId == null) return;
     setError(null);
@@ -332,6 +593,7 @@ function App() {
   const messages = useMemo(() => session?.messages ?? [], [session?.messages]);
   const isRunning = runningStates.has(status.state);
   const hasContext = report != null;
+  const isComposerDisabled = !hasApiKey || activeTabId == null || isAsking;
 
   return (
     <div className="unity-shell">
@@ -384,10 +646,11 @@ function App() {
 
       <form className="composer" onSubmit={askQuestion}>
         <textarea
+          ref={textareaRef}
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
           placeholder="Ask a question about this tab..."
-          disabled={!hasApiKey || activeTabId == null || isAsking}
+          disabled={isComposerDisabled}
           rows={3}
         />
         <div className="composer-actions">
@@ -400,14 +663,38 @@ function App() {
             <Trash2 size={14} />
             Clear
           </button>
-          <button
-            type="submit"
-            className="primary-btn"
-            disabled={!hasApiKey || activeTabId == null || isAsking || !question.trim()}
-          >
-            {isAsking ? <LoaderCircle size={14} className="spin" /> : <Send size={14} />}
-            Ask
-          </button>
+          <div className="composer-submit-actions">
+            <button
+              type="button"
+              className={`icon-btn voice-btn ${isDictating ? 'voice-btn--active' : ''}`}
+              onClick={() => void toggleDictation()}
+              disabled={isComposerDisabled || !dictationSupported || isRequestingMic}
+              title={
+                !dictationSupported
+                  ? 'Voice dictation is unavailable in this browser.'
+                  : isDictating
+                    ? 'Stop voice dictation'
+                    : 'Start voice dictation'
+              }
+              aria-label={
+                !dictationSupported
+                  ? 'Voice dictation unavailable'
+                  : isDictating
+                    ? 'Stop voice dictation'
+                    : 'Start voice dictation'
+              }
+            >
+              {isDictating ? <MicOff size={14} /> : <Mic size={14} />}
+            </button>
+            <button
+              type="submit"
+              className="primary-btn"
+              disabled={isComposerDisabled || !question.trim()}
+            >
+              {isAsking ? <LoaderCircle size={14} className="spin" /> : <Send size={14} />}
+              Ask
+            </button>
+          </div>
         </div>
       </form>
 
