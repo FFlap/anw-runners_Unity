@@ -42,6 +42,8 @@ export default defineConfig({
       ...brandingManifest,
       permissions: ['activeTab', 'scripting', 'storage', 'tabs'],
       host_permissions: [
+        'http://*/*',
+        'https://*/*',
         'https://openrouter.ai/*',
         'https://www.youtube.com/*',
         'https://youtube.com/*',
