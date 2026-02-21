@@ -2,6 +2,9 @@ import type { ChatSession, ScanReport, TabContext } from '@/lib/types';
 
 const API_KEY_STORAGE_KEY = 'openrouter_api_key';
 const LEGACY_API_KEY_STORAGE_KEY = 'gemini_api_key';
+export const COLOR_BLIND_MODE_STORAGE_KEY = 'unity_color_blind_mode';
+export const AUDIO_RATE_STORAGE_KEY = 'unity_audio_rate';
+export const AUDIO_FOLLOW_MODE_STORAGE_KEY = 'unity_audio_follow_mode';
 
 const REPORT_PREFIX = 'scan_report_';
 const CONTEXT_PREFIX = 'scan_context_';
@@ -25,6 +28,38 @@ export async function getApiKey(): Promise<string | null> {
 
 export async function hasApiKey(): Promise<boolean> {
   return (await getApiKey()) !== null;
+}
+
+export async function getColorBlindModeEnabled(): Promise<boolean> {
+  const stored = await ext.storage.local.get(COLOR_BLIND_MODE_STORAGE_KEY);
+  return Boolean(stored?.[COLOR_BLIND_MODE_STORAGE_KEY]);
+}
+
+export async function setColorBlindModeEnabled(enabled: boolean): Promise<void> {
+  await ext.storage.local.set({ [COLOR_BLIND_MODE_STORAGE_KEY]: enabled });
+}
+
+function normalizeAudioRate(rate: number): number {
+  if (!Number.isFinite(rate)) return 1;
+  return Math.max(0.75, Math.min(2, rate));
+}
+
+export async function getAudioRate(): Promise<number> {
+  const stored = await ext.storage.local.get(AUDIO_RATE_STORAGE_KEY);
+  return normalizeAudioRate(Number(stored?.[AUDIO_RATE_STORAGE_KEY] ?? 1));
+}
+
+export async function setAudioRate(rate: number): Promise<void> {
+  await ext.storage.local.set({ [AUDIO_RATE_STORAGE_KEY]: normalizeAudioRate(rate) });
+}
+
+export async function getAudioFollowModeEnabled(): Promise<boolean> {
+  const stored = await ext.storage.local.get(AUDIO_FOLLOW_MODE_STORAGE_KEY);
+  return Boolean(stored?.[AUDIO_FOLLOW_MODE_STORAGE_KEY]);
+}
+
+export async function setAudioFollowModeEnabled(enabled: boolean): Promise<void> {
+  await ext.storage.local.set({ [AUDIO_FOLLOW_MODE_STORAGE_KEY]: enabled });
 }
 
 function reportKey(tabId: number): string {
