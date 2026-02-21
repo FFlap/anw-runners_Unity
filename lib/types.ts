@@ -84,6 +84,45 @@ export interface ChatSession {
   updatedAt: string;
 }
 
+export interface AutofillProfile {
+  fullName: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  stateOrProvince: string;
+  postalOrZip: string;
+  country: string;
+}
+
+export type AutofillFieldKey =
+  | 'email'
+  | 'firstName'
+  | 'lastName'
+  | 'fullName'
+  | 'phone'
+  | 'addressLine1'
+  | 'addressLine2'
+  | 'city'
+  | 'stateProvince'
+  | 'postalZip'
+  | 'country';
+
+export interface DetectedFormField {
+  index: number;
+  elementType: 'input' | 'textarea' | 'select';
+  inputType: string;
+  name: string;
+  id: string;
+  autocomplete: string;
+  placeholder: string;
+  labelText: string;
+  fieldKey: AutofillFieldKey | null;
+}
+
 export interface EmbeddedPanelUpdate {
   type: 'EMBEDDED_PANEL_UPDATE';
   tabId: number;
