@@ -59,7 +59,8 @@ body {
 
 button,
 textarea,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -538,6 +539,17 @@ input {
   font-size: 10px;
   font-weight: 500;
   color: var(--unity-muted);
+}
+
+.font-select {
+  border: 1px solid var(--unity-border);
+  border-radius: 8px;
+  background: var(--unity-surface);
+  color: var(--unity-text);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 8px;
+  min-width: 132px;
 }
 
 .audio-status-card,

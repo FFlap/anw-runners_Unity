@@ -3,15 +3,22 @@ import {
   AUDIO_FOLLOW_MODE_STORAGE_KEY,
   AUDIO_RATE_STORAGE_KEY,
   COLOR_BLIND_MODE_STORAGE_KEY,
+  FORCED_FONT_STORAGE_KEY,
+  normalizeForcedFont,
+  type ForcedFontOption,
 } from '@/lib/storage';
 
 const STYLE_ID = 'cred-selection-actions-style';
 const PAGE_STYLE_ID = 'cred-page-colorblind-style';
+const PAGE_FONT_STYLE_ID = 'cred-page-forced-font-style';
 const ACTION_BAR_ID = 'cred-selection-actions';
 const CARD_ID = 'cred-selection-result-card';
 const AUDIO_FOLLOW_PANEL_ID = 'unity-audio-follow-panel';
 const UI_ATTR = 'data-cred-selection-ui';
 const PAGE_MODE_ATTR = 'data-unity-color-blind-page';
+const PAGE_FONT_ATTR = 'data-unity-forced-font';
+const SHADOW_FONT_STYLE_ATTR = 'data-unity-forced-font-shadow-style';
+const ATTACH_SHADOW_HOOK_ATTR = 'data-unity-attach-shadow-hook';
 const MIN_SELECTION_CHARS = 16;
 const POINTER_ANCHOR_MAX_AGE_MS = 2_500;
 const AUDIO_PAGE_FOLLOW_PROGRESS_LAG = 0.07;
@@ -78,6 +85,8 @@ interface SelectionLineRect {
   width: number;
   height: number;
 }
+
+const KNOWN_SHADOW_ROOTS = new Set<ShadowRoot>();
 
 const REWRITE_LEVELS: RewriteLevel[] = [1, 2, 3];
 const LEVEL_LABELS: Record<RewriteLevel, string> = {
@@ -627,6 +636,177 @@ function applyPageColorBlindMode(enabled: boolean) {
   document.documentElement.removeAttribute(PAGE_MODE_ATTR);
 }
 
+function getForcedFontFamily(forcedFont: ForcedFontOption): string | null {
+  switch (forcedFont) {
+    case 'opendyslexic':
+      return '"Unity OpenDyslexic", "OpenDyslexic", "OpenDyslexic3", Arial, sans-serif';
+    case 'arial':
+      return 'Arial, sans-serif';
+    case 'helvetica':
+      return 'Helvetica, Arial, sans-serif';
+    case 'verdana':
+      return 'Verdana, Geneva, sans-serif';
+    case 'comic-sans':
+      return '"Comic Sans MS", "Comic Sans", "Chalkboard SE", "Comic Neue", cursive';
+    case 'none':
+    default:
+      return null;
+  }
+}
+
+function installForcedFontStyles() {
+  if (document.getElementById(PAGE_FONT_STYLE_ID)) return;
+  const openDyslexicRegularUrl = ext.runtime.getURL('/fonts/opendyslexic/OpenDyslexic-Regular.otf');
+  const openDyslexicBoldUrl = ext.runtime.getURL('/fonts/opendyslexic/OpenDyslexic-Bold.otf');
+  const openDyslexicItalicUrl = ext.runtime.getURL('/fonts/opendyslexic/OpenDyslexic-Italic.otf');
+  const openDyslexicBoldItalicUrl = ext.runtime.getURL('/fonts/opendyslexic/OpenDyslexic-BoldItalic.otf');
+  const style = document.createElement('style');
+  style.id = PAGE_FONT_STYLE_ID;
+  style.textContent = `
+    @font-face {
+      font-family: "Unity OpenDyslexic";
+      src: url("${openDyslexicRegularUrl}") format("opentype");
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: "Unity OpenDyslexic";
+      src: url("${openDyslexicBoldUrl}") format("opentype");
+      font-style: normal;
+      font-weight: 700;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: "Unity OpenDyslexic";
+      src: url("${openDyslexicItalicUrl}") format("opentype");
+      font-style: italic;
+      font-weight: 400;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: "Unity OpenDyslexic";
+      src: url("${openDyslexicBoldItalicUrl}") format("opentype");
+      font-style: italic;
+      font-weight: 700;
+      font-display: swap;
+    }
+
+    html[${PAGE_FONT_ATTR}="true"],
+    html[${PAGE_FONT_ATTR}="true"] *,
+    html[${PAGE_FONT_ATTR}="true"] *::before,
+    html[${PAGE_FONT_ATTR}="true"] *::after {
+      font-family: var(--unity-forced-font-family) !important;
+    }
+
+    html[${PAGE_FONT_ATTR}="true"] :is(input, textarea)::placeholder {
+      font-family: var(--unity-forced-font-family) !important;
+    }
+  `;
+  document.documentElement.appendChild(style);
+}
+
+function buildForcedFontShadowCss(fontFamily: string): string {
+  return `
+    :host,
+    :host *,
+    :host *::before,
+    :host *::after {
+      font-family: ${fontFamily} !important;
+    }
+
+    :host :is(input, textarea)::placeholder {
+      font-family: ${fontFamily} !important;
+    }
+  `;
+}
+
+function applyForcedFontToShadowRoot(shadowRoot: ShadowRoot, fontFamily: string | null) {
+  KNOWN_SHADOW_ROOTS.add(shadowRoot);
+  const existingStyle = shadowRoot.querySelector<HTMLStyleElement>(
+    `style[${SHADOW_FONT_STYLE_ATTR}="true"]`,
+  );
+
+  if (!fontFamily) {
+    existingStyle?.remove();
+    return;
+  }
+
+  const style = existingStyle ?? document.createElement('style');
+  if (!existingStyle) {
+    style.setAttribute(SHADOW_FONT_STYLE_ATTR, 'true');
+    shadowRoot.prepend(style);
+  }
+  style.textContent = buildForcedFontShadowCss(fontFamily);
+}
+
+function syncKnownShadowRoots(fontFamily: string | null) {
+  for (const shadowRoot of KNOWN_SHADOW_ROOTS) {
+    const host = shadowRoot.host;
+    if (!host?.isConnected) {
+      KNOWN_SHADOW_ROOTS.delete(shadowRoot);
+      continue;
+    }
+    applyForcedFontToShadowRoot(shadowRoot, fontFamily);
+  }
+}
+
+function installAttachShadowHook() {
+  const proto = Element.prototype as Element & {
+    [ATTACH_SHADOW_HOOK_ATTR]?: true;
+    attachShadow: (init: ShadowRootInit) => ShadowRoot;
+  };
+  if (proto[ATTACH_SHADOW_HOOK_ATTR]) return;
+  const nativeAttachShadow = proto.attachShadow;
+  proto.attachShadow = function patchedAttachShadow(this: Element, init: ShadowRootInit): ShadowRoot {
+    const shadowRoot = nativeAttachShadow.call(this, init);
+    KNOWN_SHADOW_ROOTS.add(shadowRoot);
+    const activeFontFamily =
+      document.documentElement.style.getPropertyValue('--unity-forced-font-family').trim() || null;
+    applyForcedFontToShadowRoot(shadowRoot, activeFontFamily);
+    return shadowRoot;
+  };
+  proto[ATTACH_SHADOW_HOOK_ATTR] = true;
+}
+
+function syncForcedFontInNode(node: ParentNode, fontFamily: string | null) {
+  const elements = node.querySelectorAll<HTMLElement>('*');
+  for (const element of elements) {
+    const shadowRoot = element.shadowRoot;
+    if (!shadowRoot) continue;
+    applyForcedFontToShadowRoot(shadowRoot, fontFamily);
+    syncForcedFontInNode(shadowRoot, fontFamily);
+  }
+}
+
+function syncForcedFontInElementAndDescendants(element: Element, fontFamily: string | null) {
+  const root = element as HTMLElement;
+  if (root.shadowRoot) {
+    applyForcedFontToShadowRoot(root.shadowRoot, fontFamily);
+    syncForcedFontInNode(root.shadowRoot, fontFamily);
+  }
+  syncForcedFontInNode(element, fontFamily);
+}
+
+function applyForcedPageFont(forcedFont: ForcedFontOption) {
+  const fontFamily = getForcedFontFamily(forcedFont);
+  if (!fontFamily) {
+    document.documentElement.removeAttribute(PAGE_FONT_ATTR);
+    document.documentElement.style.removeProperty('--unity-forced-font-family');
+    syncForcedFontInNode(document.documentElement, null);
+    syncKnownShadowRoots(null);
+    return;
+  }
+
+  document.documentElement.setAttribute(PAGE_FONT_ATTR, 'true');
+  document.documentElement.style.setProperty('--unity-forced-font-family', fontFamily);
+  syncForcedFontInNode(document.documentElement, fontFamily);
+  syncKnownShadowRoots(fontFamily);
+}
+
 function isUiNode(node: Node | null): boolean {
   const element = node instanceof Element ? node : node?.parentElement ?? null;
   return Boolean(element?.closest(`[${UI_ATTR}="true"]`));
@@ -802,9 +982,14 @@ async function sendActionRequest(
 
 export default defineContentScript({
   matches: ['*://*/*'],
+  allFrames: true,
+  matchAboutBlank: true,
+  runAt: 'document_start',
   main() {
+    installAttachShadowHook();
     installStyles();
     installPageColorBlindStyles();
+    installForcedFontStyles();
 
     let activeSelection: SelectionSnapshot | null = null;
     let actionBar: HTMLElement | null = null;
@@ -814,6 +999,7 @@ export default defineContentScript({
     let pointerSelectionInProgress = false;
     let lastPointerAnchor: PointerAnchor | null = null;
     let colorBlindModeEnabled = false;
+    let forcedFont: ForcedFontOption = 'none';
     let audioRate = 1;
     let audioFollowModeEnabled = false;
     let audioCurrentText = '';
@@ -839,6 +1025,8 @@ export default defineContentScript({
     let audioCurrentPageLineIndex = -1;
     let audioLastPageLineChangeAt = 0;
     let audioLastAutoScrollAt = 0;
+    let forcedFontObserver: MutationObserver | null = null;
+    let forcedFontRescanInterval: number | null = null;
 
     const applyColorBlindModeToUi = () => {
       if (actionBar) {
@@ -850,6 +1038,49 @@ export default defineContentScript({
       if (audioFollowPanel) {
         audioFollowPanel.setAttribute('data-color-blind-mode', String(colorBlindModeEnabled));
       }
+    };
+
+    const ensureForcedFontObserver = () => {
+      if (forcedFontObserver) return;
+      forcedFontObserver = new MutationObserver((mutations) => {
+        const fontFamily = getForcedFontFamily(forcedFont);
+        if (!fontFamily) return;
+
+        for (const mutation of mutations) {
+          for (const addedNode of mutation.addedNodes) {
+            if (!(addedNode instanceof Element)) continue;
+            syncForcedFontInElementAndDescendants(addedNode, fontFamily);
+          }
+        }
+      });
+      forcedFontObserver.observe(document.documentElement, { childList: true, subtree: true });
+    };
+
+    const runForcedFontRescan = () => {
+      const fontFamily = getForcedFontFamily(forcedFont);
+      if (!fontFamily) return;
+      syncForcedFontInNode(document.documentElement, fontFamily);
+      syncKnownShadowRoots(fontFamily);
+    };
+
+    const startForcedFontRescanLoop = () => {
+      if (forcedFontRescanInterval !== null) return;
+      runForcedFontRescan();
+      forcedFontRescanInterval = window.setInterval(runForcedFontRescan, 1500);
+    };
+
+    const stopForcedFontRescanLoop = () => {
+      if (forcedFontRescanInterval === null) return;
+      window.clearInterval(forcedFontRescanInterval);
+      forcedFontRescanInterval = null;
+    };
+
+    const syncForcedFontRescanLoop = () => {
+      if (getForcedFontFamily(forcedFont)) {
+        startForcedFontRescanLoop();
+        return;
+      }
+      stopForcedFontRescanLoop();
     };
 
     const getSpeechEngine = (): SpeechSynthesis | null => {
@@ -1614,6 +1845,11 @@ export default defineContentScript({
         applyColorBlindModeToUi();
         applyPageColorBlindMode(colorBlindModeEnabled);
       }
+      if (FORCED_FONT_STORAGE_KEY in changes) {
+        forcedFont = normalizeForcedFont(changes[FORCED_FONT_STORAGE_KEY]?.newValue);
+        applyForcedPageFont(forcedFont);
+        syncForcedFontRescanLoop();
+      }
       if (AUDIO_RATE_STORAGE_KEY in changes) {
         const nextRate = clampAudioRate(Number(changes[AUDIO_RATE_STORAGE_KEY]?.newValue ?? audioRate));
         void setAudioRateAndApply(nextRate);
@@ -1625,14 +1861,23 @@ export default defineContentScript({
 
     ext.runtime.onMessage.addListener(onRuntimeMessage as any);
     ext.storage.onChanged.addListener(onStorageChanged);
+    ensureForcedFontObserver();
     void ext.storage.local
-      .get([COLOR_BLIND_MODE_STORAGE_KEY, AUDIO_RATE_STORAGE_KEY, AUDIO_FOLLOW_MODE_STORAGE_KEY])
+      .get([
+        COLOR_BLIND_MODE_STORAGE_KEY,
+        FORCED_FONT_STORAGE_KEY,
+        AUDIO_RATE_STORAGE_KEY,
+        AUDIO_FOLLOW_MODE_STORAGE_KEY,
+      ])
       .then((stored) => {
         colorBlindModeEnabled = Boolean(stored?.[COLOR_BLIND_MODE_STORAGE_KEY]);
+        forcedFont = normalizeForcedFont(stored?.[FORCED_FONT_STORAGE_KEY]);
         audioRate = clampAudioRate(Number(stored?.[AUDIO_RATE_STORAGE_KEY] ?? 1));
         audioFollowModeEnabled = Boolean(stored?.[AUDIO_FOLLOW_MODE_STORAGE_KEY]);
         applyColorBlindModeToUi();
         applyPageColorBlindMode(colorBlindModeEnabled);
+        applyForcedPageFont(forcedFont);
+        syncForcedFontRescanLoop();
         syncAudioFollowPanel();
       })
       .catch(() => {
@@ -1662,6 +1907,9 @@ export default defineContentScript({
       stopAudioPlayback(false);
       removeAudioFollowPanel();
       clearPageHighlights();
+      forcedFontObserver?.disconnect();
+      forcedFontObserver = null;
+      stopForcedFontRescanLoop();
       window.removeEventListener('resize', onResize);
       ext.runtime.onMessage.removeListener(onRuntimeMessage as any);
       ext.storage.onChanged.removeListener(onStorageChanged);

@@ -16,9 +16,12 @@ import {
   getAudioFollowModeEnabled,
   getAudioRate,
   getColorBlindModeEnabled,
+  getForcedFont,
   setAudioFollowModeEnabled,
   setAudioRate,
   setColorBlindModeEnabled,
+  setForcedFont,
+  type ForcedFontOption,
 } from '@/lib/storage';
 import type {
   ChatMessage,
@@ -39,6 +42,7 @@ const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeo
 const API_KEY_STORAGE_KEY = 'openrouter_api_key';
 const LEGACY_API_KEY_STORAGE_KEY = 'gemini_api_key';
 const COLOR_BLIND_SWITCH_ID = 'unity-color-blind-mode-switch';
+const FORCED_FONT_SELECT_ID = 'unity-forced-font-select';
 
 type SettingsResponse = { hasApiKey: boolean };
 type SessionResponse = { session: ChatSession | null };
@@ -187,14 +191,18 @@ function SettingsModal({
   onClose,
   hasApiKey,
   isColorBlindMode,
+  forcedFont,
   onToggleColorBlindMode,
+  onForcedFontChange,
   onSaved,
 }: {
   open: boolean;
   onClose: () => void;
   hasApiKey: boolean;
   isColorBlindMode: boolean;
+  forcedFont: ForcedFontOption;
   onToggleColorBlindMode: () => void | Promise<void>;
+  onForcedFontChange: (font: ForcedFontOption) => void | Promise<void>;
   onSaved: () => void;
 }) {
   const [apiKey, setApiKey] = useState('');
@@ -283,6 +291,27 @@ function SettingsModal({
               <span className="mode-switch-text">{isColorBlindMode ? 'On' : 'Off'}</span>
             </button>
           </div>
+          <div className="audio-follow-row">
+            <label htmlFor={FORCED_FONT_SELECT_ID} className="audio-follow-label">
+              <span>Force Web Font</span>
+              <small>Apply a preferred font across webpages while browsing.</small>
+            </label>
+            <select
+              id={FORCED_FONT_SELECT_ID}
+              className="font-select"
+              value={forcedFont}
+              onChange={(event) => {
+                void onForcedFontChange(event.target.value as ForcedFontOption);
+              }}
+            >
+              <option value="none">None</option>
+              <option value="opendyslexic">OpenDyslexic</option>
+              <option value="arial">Arial</option>
+              <option value="helvetica">Helvetica</option>
+              <option value="verdana">Verdana</option>
+              <option value="comic-sans">Comic Sans</option>
+            </select>
+          </div>
         </section>
       </div>
     </div>
@@ -339,6 +368,7 @@ function App() {
   const [isAsking, setIsAsking] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isColorBlindMode, setIsColorBlindMode] = useState(false);
+  const [forcedFont, setForcedFontState] = useState<ForcedFontOption>('none');
   const [activePane, setActivePane] = useState<PopupTab>('chat');
   const [audioState, setAudioState] = useState<AudioState>(defaultAudioState);
   const [audioRate, setAudioRateState] = useState(1);
@@ -393,13 +423,15 @@ function App() {
           (typeof localStorageState?.[LEGACY_API_KEY_STORAGE_KEY] === 'string' &&
             localStorageState[LEGACY_API_KEY_STORAGE_KEY].trim().length > 0);
 
-        const [nextColorBlindMode, nextAudioRate, nextAudioFollow] = await Promise.all([
+        const [nextColorBlindMode, nextAudioRate, nextAudioFollow, nextForcedFont] = await Promise.all([
           getColorBlindModeEnabled(),
           getAudioRate(),
           getAudioFollowModeEnabled(),
+          getForcedFont(),
         ]);
         setHasApiKey(storageHasKey || Boolean(settings.hasApiKey));
         setIsColorBlindMode(nextColorBlindMode);
+        setForcedFontState(nextForcedFont);
         setAudioRateState(nextAudioRate);
         setAudioFollowModeState(nextAudioFollow);
 
@@ -760,6 +792,15 @@ function App() {
     }
   }, [isColorBlindMode]);
 
+  const handleForcedFontChange = useCallback(async (nextFont: ForcedFontOption) => {
+    setForcedFontState(nextFont);
+    try {
+      await setForcedFont(nextFont);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Failed to update forced font setting.');
+    }
+  }, []);
+
   const onAudioRateChange = useCallback(async (value: number) => {
     const clamped = Math.max(0.75, Math.min(2, Number(value.toFixed(2))));
     setAudioRateState(clamped);
@@ -1039,7 +1080,9 @@ function App() {
         onClose={() => setIsSettingsOpen(false)}
         hasApiKey={hasApiKey}
         isColorBlindMode={isColorBlindMode}
+        forcedFont={forcedFont}
         onToggleColorBlindMode={toggleColorBlindMode}
+        onForcedFontChange={handleForcedFontChange}
         onSaved={() => {
           setHasApiKey(true);
           setIsSettingsOpen(false);

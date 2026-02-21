@@ -36,6 +36,12 @@ export default defineConfig({
           128: 'icon/128.png',
         },
       },
+      web_accessible_resources: [
+        {
+          resources: ['fonts/opendyslexic/*'],
+          matches: ['http://*/*', 'https://*/*'],
+        },
+      ],
     };
 
     const productionManifest = {

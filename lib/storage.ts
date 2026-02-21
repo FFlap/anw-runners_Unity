@@ -5,6 +5,24 @@ const LEGACY_API_KEY_STORAGE_KEY = 'gemini_api_key';
 export const COLOR_BLIND_MODE_STORAGE_KEY = 'unity_color_blind_mode';
 export const AUDIO_RATE_STORAGE_KEY = 'unity_audio_rate';
 export const AUDIO_FOLLOW_MODE_STORAGE_KEY = 'unity_audio_follow_mode';
+export const FORCED_FONT_STORAGE_KEY = 'unity_forced_font';
+
+export type ForcedFontOption =
+  | 'none'
+  | 'opendyslexic'
+  | 'arial'
+  | 'helvetica'
+  | 'verdana'
+  | 'comic-sans';
+
+const FORCED_FONT_OPTIONS: readonly ForcedFontOption[] = [
+  'none',
+  'opendyslexic',
+  'arial',
+  'helvetica',
+  'verdana',
+  'comic-sans',
+];
 
 const REPORT_PREFIX = 'scan_report_';
 const CONTEXT_PREFIX = 'scan_context_';
@@ -60,6 +78,28 @@ export async function getAudioFollowModeEnabled(): Promise<boolean> {
 
 export async function setAudioFollowModeEnabled(enabled: boolean): Promise<void> {
   await ext.storage.local.set({ [AUDIO_FOLLOW_MODE_STORAGE_KEY]: enabled });
+}
+
+export function normalizeForcedFont(value: unknown): ForcedFontOption {
+  if (typeof value !== 'string') return 'none';
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'dyslexie') {
+    // Backward compatibility with previously saved setting.
+    return 'opendyslexic';
+  }
+  if ((FORCED_FONT_OPTIONS as readonly string[]).includes(normalized)) {
+    return normalized as ForcedFontOption;
+  }
+  return 'none';
+}
+
+export async function getForcedFont(): Promise<ForcedFontOption> {
+  const stored = await ext.storage.local.get(FORCED_FONT_STORAGE_KEY);
+  return normalizeForcedFont(stored?.[FORCED_FONT_STORAGE_KEY]);
+}
+
+export async function setForcedFont(font: ForcedFontOption): Promise<void> {
+  await ext.storage.local.set({ [FORCED_FONT_STORAGE_KEY]: normalizeForcedFont(font) });
 }
 
 function reportKey(tabId: number): string {
