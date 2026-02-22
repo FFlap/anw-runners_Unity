@@ -11,6 +11,16 @@ Unity is a browser extension that makes the internet clearer, more accessible, a
 - Provides source chips per answer that jump to supporting text:
   - Webpages: inline highlight + scroll to matching text.
   - YouTube: seek to transcript timestamp when available.
+- Enhances Google search results based on your intent
+- Distraction-free Reader Mode for cleaner articles
+- Text-to-speech Audio Mode with adjustable speed
+- Smart content summaries and tone analysis
+- One-click Autofill for common form fields
+- Built-in Color Blind Mode for improved contrast
+- Reduced Motion Mode for a calmer experience
+- Lightweight, non-intrusive design that works on top of existing sites
+
+
 
 ## Setup
 
@@ -42,3 +52,4 @@ npm run build
 - Answers are intentionally constrained to tab-local context.
 - If context is insufficient, Unity returns an insufficient-evidence style answer instead of fabricating details.
 - Voice dictation requires microphone permission set to **Allow**.
+
