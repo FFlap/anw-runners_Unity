@@ -86,6 +86,7 @@ export interface ScanReport {
 
 export interface SourceSnippet extends ContextSnippet {
   score: number;
+  quote?: string;
 }
 
 export interface ChatMessage {

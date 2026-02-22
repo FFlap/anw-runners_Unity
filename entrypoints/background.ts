@@ -854,7 +854,11 @@ async function runScan(tabId: number): Promise<void> {
     }
 
     const text = rawText.slice(0, MAX_CONTEXT_CHARS);
-    const snippets = buildContextSnippets({ text, transcriptSegments });
+    const snippets = buildContextSnippets({
+      text,
+      transcriptSegments,
+      mainArticleBlocks: mainArticle?.blocks,
+    });
 
     const context: TabContext = {
       tabId,
@@ -1048,10 +1052,30 @@ async function jumpToSourceSnippet(tabId: number, source: SourceSnippet): Promis
     return executeOnTab<boolean>(tabId, seekVideoToTimestampInPage, [resolvedTimestampSec as number]);
   }
 
-  const quote = (contextSource?.text ?? source.text)?.trim();
-  if (!quote) return false;
+  const quoteCandidates = Array.from(
+    new Set(
+      [
+        source.quote,
+        source.text,
+        contextSource?.text,
+      ]
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter((value) => value.length >= 6),
+    ),
+  );
+  if (quoteCandidates.length === 0) return false;
   const colorBlindModeEnabled = await getColorBlindModeEnabled().catch(() => false);
-  return executeOnTab<boolean>(tabId, highlightAndScrollSnippetInPage, [quote, source.id, colorBlindModeEnabled]);
+
+  for (const quote of quoteCandidates) {
+    const highlighted = await executeOnTab<boolean>(
+      tabId,
+      highlightAndScrollSnippetInPage,
+      [quote, source.id, colorBlindModeEnabled],
+    );
+    if (highlighted) return true;
+  }
+
+  return false;
 }
 
 export default defineBackground(() => {

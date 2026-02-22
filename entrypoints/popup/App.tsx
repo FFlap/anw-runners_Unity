@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import {
   clearAutofillProfile,
+  getColorBlindFilter,
   createEmptyAutofillProfile,
   getAutofillProfile,
   getAudioFollowModeEnabled,
@@ -22,11 +23,13 @@ import {
   getForcedFont,
   getReduceMotionEnabled,
   saveAutofillProfile,
+  setColorBlindFilter,
   setAudioFollowModeEnabled,
   setAudioRate,
   setColorBlindModeEnabled,
   setForcedFont,
   setReduceMotionEnabled,
+  type ColorBlindFilterOption,
   type ForcedFontOption,
 } from '@/lib/storage';
 import type {
@@ -51,6 +54,7 @@ const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeo
 const API_KEY_STORAGE_KEY = 'openrouter_api_key';
 const LEGACY_API_KEY_STORAGE_KEY = 'gemini_api_key';
 const COLOR_BLIND_SWITCH_ID = 'unity-color-blind-mode-switch';
+const COLOR_BLIND_TYPE_SELECT_ID = 'unity-color-blind-type-select';
 const REDUCE_MOTION_SWITCH_ID = 'unity-reduce-motion-switch';
 const FORCED_FONT_SELECT_ID = 'unity-forced-font-select';
 
@@ -422,9 +426,11 @@ function SettingsModal({
   onClose,
   hasApiKey,
   isColorBlindMode,
+  colorBlindFilter,
   isReduceMotion,
   forcedFont,
   onToggleColorBlindMode,
+  onColorBlindFilterChange,
   onToggleReduceMotion,
   onForcedFontChange,
   onSaved,
@@ -433,9 +439,11 @@ function SettingsModal({
   onClose: () => void;
   hasApiKey: boolean;
   isColorBlindMode: boolean;
+  colorBlindFilter: ColorBlindFilterOption;
   isReduceMotion: boolean;
   forcedFont: ForcedFontOption;
   onToggleColorBlindMode: () => void | Promise<void>;
+  onColorBlindFilterChange: (filter: ColorBlindFilterOption) => void | Promise<void>;
   onToggleReduceMotion: () => void | Promise<void>;
   onForcedFontChange: (font: ForcedFontOption) => void | Promise<void>;
   onSaved: () => void;
@@ -525,6 +533,27 @@ function SettingsModal({
               </span>
               <span className="mode-switch-text">{isColorBlindMode ? 'On' : 'Off'}</span>
             </button>
+          </div>
+          <div className="audio-follow-row">
+            <label htmlFor={COLOR_BLIND_TYPE_SELECT_ID} className="audio-follow-label">
+              <span>Color Blind Filter</span>
+              <small>Choose the color-vision simulation type for webpages.</small>
+            </label>
+            <select
+              id={COLOR_BLIND_TYPE_SELECT_ID}
+              className="font-select"
+              value={colorBlindFilter}
+              onChange={(event) => {
+                void onColorBlindFilterChange(event.target.value as ColorBlindFilterOption);
+              }}
+              disabled={!isColorBlindMode}
+            >
+              <option value="none">No Filter</option>
+              <option value="protanopia">Protanopia (Red-blind)</option>
+              <option value="deuteranopia">Deuteranopia (Green-blind)</option>
+              <option value="tritanopia">Tritanopia (Blue-blind)</option>
+              <option value="achromatopsia">Achromatopsia (Monochrome)</option>
+            </select>
           </div>
           <div className="audio-follow-row">
             <label htmlFor={REDUCE_MOTION_SWITCH_ID} className="audio-follow-label">
@@ -638,6 +667,7 @@ function App() {
   const [isAsking, setIsAsking] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isColorBlindMode, setIsColorBlindMode] = useState(false);
+  const [colorBlindFilter, setColorBlindFilterState] = useState<ColorBlindFilterOption>('none');
   const [isReduceMotion, setIsReduceMotion] = useState(false);
   const [forcedFont, setForcedFontState] = useState<ForcedFontOption>('none');
   const [activePane, setActivePane] = useState<PopupTab>('chat');
@@ -800,8 +830,9 @@ function App() {
           (typeof localStorageState?.[LEGACY_API_KEY_STORAGE_KEY] === 'string' &&
             localStorageState[LEGACY_API_KEY_STORAGE_KEY].trim().length > 0);
 
-        const [nextColorBlindMode, nextReduceMotion, nextAudioRate, nextAudioFollow, nextForcedFont] = await Promise.all([
+        const [nextColorBlindMode, nextColorBlindFilter, nextReduceMotion, nextAudioRate, nextAudioFollow, nextForcedFont] = await Promise.all([
           getColorBlindModeEnabled(),
+          getColorBlindFilter(),
           getReduceMotionEnabled(),
           getAudioRate(),
           getAudioFollowModeEnabled(),
@@ -809,6 +840,7 @@ function App() {
         ]);
         setHasApiKey(storageHasKey || Boolean(settings.hasApiKey));
         setIsColorBlindMode(nextColorBlindMode);
+        setColorBlindFilterState(nextColorBlindFilter);
         setIsReduceMotion(nextReduceMotion);
         setForcedFontState(nextForcedFont);
         setAudioRateState(nextAudioRate);
@@ -1360,6 +1392,15 @@ function App() {
       setError(saveError instanceof Error ? saveError.message : 'Failed to update accessibility mode.');
     }
   }, [isColorBlindMode]);
+
+  const handleColorBlindFilterChange = useCallback(async (nextFilter: ColorBlindFilterOption) => {
+    setColorBlindFilterState(nextFilter);
+    try {
+      await setColorBlindFilter(nextFilter);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Failed to update color blind filter.');
+    }
+  }, []);
 
   const toggleReduceMotion = useCallback(async () => {
     const next = !isReduceMotion;
@@ -2014,9 +2055,11 @@ function App() {
         onClose={() => setIsSettingsOpen(false)}
         hasApiKey={hasApiKey}
         isColorBlindMode={isColorBlindMode}
+        colorBlindFilter={colorBlindFilter}
         isReduceMotion={isReduceMotion}
         forcedFont={forcedFont}
         onToggleColorBlindMode={toggleColorBlindMode}
+        onColorBlindFilterChange={handleColorBlindFilterChange}
         onToggleReduceMotion={toggleReduceMotion}
         onForcedFontChange={handleForcedFontChange}
         onSaved={() => {

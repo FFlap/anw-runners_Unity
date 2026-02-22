@@ -3,11 +3,27 @@ import type { AutofillProfile, ChatSession, ScanReport, TabContext } from '@/lib
 const API_KEY_STORAGE_KEY = 'openrouter_api_key';
 const LEGACY_API_KEY_STORAGE_KEY = 'gemini_api_key';
 export const COLOR_BLIND_MODE_STORAGE_KEY = 'unity_color_blind_mode';
+export const COLOR_BLIND_FILTER_STORAGE_KEY = 'unity_color_blind_filter';
 export const REDUCE_MOTION_STORAGE_KEY = 'unity_reduce_motion';
 export const AUDIO_RATE_STORAGE_KEY = 'unity_audio_rate';
 export const AUDIO_FOLLOW_MODE_STORAGE_KEY = 'unity_audio_follow_mode';
 export const FORCED_FONT_STORAGE_KEY = 'unity_forced_font';
 export const AUTOFILL_PROFILE_STORAGE_KEY = 'unity_autofill_profile';
+
+export type ColorBlindFilterOption =
+  | 'none'
+  | 'protanopia'
+  | 'deuteranopia'
+  | 'tritanopia'
+  | 'achromatopsia';
+
+const COLOR_BLIND_FILTER_OPTIONS: readonly ColorBlindFilterOption[] = [
+  'none',
+  'protanopia',
+  'deuteranopia',
+  'tritanopia',
+  'achromatopsia',
+];
 
 export type ForcedFontOption =
   | 'none'
@@ -99,6 +115,24 @@ export async function getColorBlindModeEnabled(): Promise<boolean> {
 
 export async function setColorBlindModeEnabled(enabled: boolean): Promise<void> {
   await ext.storage.local.set({ [COLOR_BLIND_MODE_STORAGE_KEY]: enabled });
+}
+
+export function normalizeColorBlindFilter(value: unknown): ColorBlindFilterOption {
+  if (typeof value !== 'string') return 'none';
+  const normalized = value.trim().toLowerCase();
+  if ((COLOR_BLIND_FILTER_OPTIONS as readonly string[]).includes(normalized)) {
+    return normalized as ColorBlindFilterOption;
+  }
+  return 'none';
+}
+
+export async function getColorBlindFilter(): Promise<ColorBlindFilterOption> {
+  const stored = await ext.storage.local.get(COLOR_BLIND_FILTER_STORAGE_KEY);
+  return normalizeColorBlindFilter(stored?.[COLOR_BLIND_FILTER_STORAGE_KEY]);
+}
+
+export async function setColorBlindFilter(filter: ColorBlindFilterOption): Promise<void> {
+  await ext.storage.local.set({ [COLOR_BLIND_FILTER_STORAGE_KEY]: normalizeColorBlindFilter(filter) });
 }
 
 export async function getReduceMotionEnabled(): Promise<boolean> {

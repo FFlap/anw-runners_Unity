@@ -11,10 +11,13 @@ import type {
 import {
   AUDIO_FOLLOW_MODE_STORAGE_KEY,
   AUDIO_RATE_STORAGE_KEY,
+  COLOR_BLIND_FILTER_STORAGE_KEY,
   COLOR_BLIND_MODE_STORAGE_KEY,
   FORCED_FONT_STORAGE_KEY,
   REDUCE_MOTION_STORAGE_KEY,
+  normalizeColorBlindFilter,
   normalizeForcedFont,
+  type ColorBlindFilterOption,
   type ForcedFontOption,
 } from '@/lib/storage';
 
@@ -31,8 +34,10 @@ const AUDIO_FOLLOW_PANEL_ID = 'unity-audio-follow-panel';
 const UI_ATTR = 'data-cred-selection-ui';
 const MOTION_EXEMPT_ATTR = 'data-unity-motion-exempt';
 const PAGE_MODE_ATTR = 'data-unity-color-blind-page';
+const PAGE_COLOR_BLIND_FILTER_ATTR = 'data-unity-color-blind-filter';
 const PAGE_FONT_ATTR = 'data-unity-forced-font';
 const PAGE_REDUCED_MOTION_ATTR = 'data-unity-reduced-motion';
+const PAGE_COLOR_BLIND_FILTERS_ID = 'unity-color-blind-svg-filters';
 const GIF_FROZEN_ATTR = 'data-unity-rm-gif-frozen';
 const GIF_FROZEN_SRC_ATTR = 'data-unity-rm-gif-frozen-src';
 const GIF_FROZEN_PENDING_SRC = '__unity-pending-freeze__';
@@ -50,6 +55,13 @@ const POINTER_ANCHOR_MAX_AGE_MS = 2_500;
 const AUDIO_PAGE_FOLLOW_PROGRESS_LAG = 0.07;
 const AUDIO_PAGE_FOLLOW_MIN_ADVANCE_MS = 120;
 const REDUCE_MOTION_RESCAN_INTERVAL_MS = 900;
+
+const COLOR_BLIND_FILTER_IDS = {
+  protanopia: 'unity-color-blind-filter-protanopia',
+  deuteranopia: 'unity-color-blind-filter-deuteranopia',
+  tritanopia: 'unity-color-blind-filter-tritanopia',
+  achromatopsia: 'unity-color-blind-filter-achromatopsia',
+} as const satisfies Record<Exclude<ColorBlindFilterOption, 'none'>, string>;
 
 const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeof browser;
 let latestUndoEntries: UndoFillEntry[] | null = null;
@@ -1545,6 +1557,22 @@ function installPageColorBlindStyles() {
       --unity-page-link-visited: #5a3f88;
     }
 
+    html[${PAGE_MODE_ATTR}="true"][${PAGE_COLOR_BLIND_FILTER_ATTR}="protanopia"] body > *:not([${UI_ATTR}="true"]) {
+      filter: url("#${COLOR_BLIND_FILTER_IDS.protanopia}");
+    }
+
+    html[${PAGE_MODE_ATTR}="true"][${PAGE_COLOR_BLIND_FILTER_ATTR}="deuteranopia"] body > *:not([${UI_ATTR}="true"]) {
+      filter: url("#${COLOR_BLIND_FILTER_IDS.deuteranopia}");
+    }
+
+    html[${PAGE_MODE_ATTR}="true"][${PAGE_COLOR_BLIND_FILTER_ATTR}="tritanopia"] body > *:not([${UI_ATTR}="true"]) {
+      filter: url("#${COLOR_BLIND_FILTER_IDS.tritanopia}");
+    }
+
+    html[${PAGE_MODE_ATTR}="true"][${PAGE_COLOR_BLIND_FILTER_ATTR}="achromatopsia"] body > *:not([${UI_ATTR}="true"]) {
+      filter: url("#${COLOR_BLIND_FILTER_IDS.achromatopsia}");
+    }
+
     html[${PAGE_MODE_ATTR}="true"] a {
       color: var(--unity-page-link) !important;
       text-decoration-line: underline !important;
@@ -1665,6 +1693,62 @@ function installPageColorBlindStyles() {
   document.documentElement.appendChild(style);
 }
 
+function installPageColorBlindFilterDefs() {
+  if (document.getElementById(PAGE_COLOR_BLIND_FILTERS_ID)) return;
+
+  const svgNs = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNs, 'svg');
+  svg.id = PAGE_COLOR_BLIND_FILTERS_ID;
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  svg.style.position = 'absolute';
+  svg.style.width = '0';
+  svg.style.height = '0';
+  svg.style.pointerEvents = 'none';
+
+  const defs = document.createElementNS(svgNs, 'defs');
+  svg.appendChild(defs);
+
+  const addMatrixFilter = (id: string, values: string) => {
+    const filter = document.createElementNS(svgNs, 'filter');
+    filter.setAttribute('id', id);
+
+    const matrix = document.createElementNS(svgNs, 'feColorMatrix');
+    matrix.setAttribute('type', 'matrix');
+    matrix.setAttribute('values', values);
+
+    filter.appendChild(matrix);
+    defs.appendChild(filter);
+  };
+
+  addMatrixFilter(COLOR_BLIND_FILTER_IDS.protanopia, `
+    0.567 0.433 0 0 0
+    0.558 0.442 0 0 0
+    0 0.242 0.758 0 0
+    0 0 0 1 0
+  `.trim());
+  addMatrixFilter(COLOR_BLIND_FILTER_IDS.deuteranopia, `
+    0.625 0.375 0 0 0
+    0.7 0.3 0 0 0
+    0 0.3 0.7 0 0
+    0 0 0 1 0
+  `.trim());
+  addMatrixFilter(COLOR_BLIND_FILTER_IDS.tritanopia, `
+    0.95 0.05 0 0 0
+    0 0.433 0.567 0 0
+    0 0.475 0.525 0 0
+    0 0 0 1 0
+  `.trim());
+  addMatrixFilter(COLOR_BLIND_FILTER_IDS.achromatopsia, `
+    0.299 0.587 0.114 0 0
+    0.299 0.587 0.114 0 0
+    0.299 0.587 0.114 0 0
+    0 0 0 1 0
+  `.trim());
+
+  document.documentElement.appendChild(svg);
+}
+
 function installPageReducedMotionStyles() {
   if (document.getElementById(PAGE_REDUCED_MOTION_STYLE_ID)) return;
   const style = document.createElement('style');
@@ -1701,12 +1785,19 @@ function installPageReducedMotionStyles() {
   document.documentElement.appendChild(style);
 }
 
-function applyPageColorBlindMode(enabled: boolean) {
+function applyPageColorBlindMode(enabled: boolean, filter: ColorBlindFilterOption) {
   if (enabled) {
     document.documentElement.setAttribute(PAGE_MODE_ATTR, 'true');
+  } else {
+    document.documentElement.removeAttribute(PAGE_MODE_ATTR);
+  }
+
+  const normalizedFilter = normalizeColorBlindFilter(filter);
+  if (enabled && normalizedFilter !== 'none') {
+    document.documentElement.setAttribute(PAGE_COLOR_BLIND_FILTER_ATTR, normalizedFilter);
     return;
   }
-  document.documentElement.removeAttribute(PAGE_MODE_ATTR);
+  document.documentElement.removeAttribute(PAGE_COLOR_BLIND_FILTER_ATTR);
 }
 
 function applyPageReducedMotionMode(enabled: boolean) {
@@ -2072,6 +2163,7 @@ export default defineContentScript({
     installAttachShadowHook();
     installStyles();
     installPageReaderStyles();
+    installPageColorBlindFilterDefs();
     installPageColorBlindStyles();
     installPageReducedMotionStyles();
     installForcedFontStyles();
@@ -2084,6 +2176,7 @@ export default defineContentScript({
     let pointerSelectionInProgress = false;
     let lastPointerAnchor: PointerAnchor | null = null;
     let colorBlindModeEnabled = false;
+    let colorBlindFilter: ColorBlindFilterOption = 'none';
     let reduceMotionEnabled = false;
     let forcedFont: ForcedFontOption = 'none';
     let audioRate = 1;
@@ -3765,7 +3858,11 @@ export default defineContentScript({
       if (COLOR_BLIND_MODE_STORAGE_KEY in changes) {
         colorBlindModeEnabled = Boolean(changes[COLOR_BLIND_MODE_STORAGE_KEY]?.newValue);
         applyColorBlindModeToUi();
-        applyPageColorBlindMode(colorBlindModeEnabled);
+        applyPageColorBlindMode(colorBlindModeEnabled, colorBlindFilter);
+      }
+      if (COLOR_BLIND_FILTER_STORAGE_KEY in changes) {
+        colorBlindFilter = normalizeColorBlindFilter(changes[COLOR_BLIND_FILTER_STORAGE_KEY]?.newValue);
+        applyPageColorBlindMode(colorBlindModeEnabled, colorBlindFilter);
       }
       if (FORCED_FONT_STORAGE_KEY in changes) {
         forcedFont = normalizeForcedFont(changes[FORCED_FONT_STORAGE_KEY]?.newValue);
@@ -3788,6 +3885,7 @@ export default defineContentScript({
       .get([
         REDUCE_MOTION_STORAGE_KEY,
         COLOR_BLIND_MODE_STORAGE_KEY,
+        COLOR_BLIND_FILTER_STORAGE_KEY,
         FORCED_FONT_STORAGE_KEY,
         AUDIO_RATE_STORAGE_KEY,
         AUDIO_FOLLOW_MODE_STORAGE_KEY,
@@ -3795,12 +3893,13 @@ export default defineContentScript({
       .then((stored) => {
         reduceMotionEnabled = Boolean(stored?.[REDUCE_MOTION_STORAGE_KEY]);
         colorBlindModeEnabled = Boolean(stored?.[COLOR_BLIND_MODE_STORAGE_KEY]);
+        colorBlindFilter = normalizeColorBlindFilter(stored?.[COLOR_BLIND_FILTER_STORAGE_KEY]);
         forcedFont = normalizeForcedFont(stored?.[FORCED_FONT_STORAGE_KEY]);
         audioRate = clampAudioRate(Number(stored?.[AUDIO_RATE_STORAGE_KEY] ?? 1));
         audioFollowModeEnabled = Boolean(stored?.[AUDIO_FOLLOW_MODE_STORAGE_KEY]);
         applyReducedMotion(reduceMotionEnabled);
         applyColorBlindModeToUi();
-        applyPageColorBlindMode(colorBlindModeEnabled);
+        applyPageColorBlindMode(colorBlindModeEnabled, colorBlindFilter);
         applyForcedPageFont(forcedFont);
         syncForcedFontRescanLoop();
         syncAudioFollowPanel();
