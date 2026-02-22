@@ -1,6 +1,6 @@
 # Unity
 
-Unity is a browser extension that turns any active tab into a chat workspace.
+Unity is a browser extension that makes the internet clearer, more accessible, and more intentional. It enhances how users search, read, and interact online by adding intelligent ranking, distraction free reading, and explainable content analysis, all without disrupting the original website. With built-in accesssibility tools like color blind mode, reduced motion support, and audio playback, Unity ensures content is easier to process for different needs and preferences. From refining Google search results to simplifying cluttered articles and helping users understand what a page actually says, Unity acts as a lightweight clarity layer on top of the web.
 
 ## What It Does
 
