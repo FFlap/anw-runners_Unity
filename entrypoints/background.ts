@@ -1,4 +1,5 @@
 import { answerQuestionFromContext, buildContextSnippets } from '@/lib/analysis';
+import { callOpenRouterJson } from '@/lib/openrouter';
 import { simplifySelectionText } from '@/lib/simplify';
 import { summarizeSelectionText } from '@/lib/summarize';
 import {
@@ -35,6 +36,9 @@ import { fetchTranscript } from 'youtube-transcript-plus';
 import { formatTimeLabel, normalizeTranscriptSegments, validateTranscriptSegments } from '@/lib/youtube-transcript';
 
 const MAX_CONTEXT_CHARS = 90_000;
+const SERP_PREVIEW_MAX_BYTES = 200 * 1024;
+const SERP_PREVIEW_TIMEOUT_MS = 5_000;
+const SERP_PREVIEW_TEXT_LIMIT = 800;
 const statusByTab = new Map<number, ScanStatus>();
 const reportByTab = new Map<number, ScanReport>();
 const contextByTab = new Map<number, TabContext>();
@@ -82,6 +86,232 @@ function normalizeUrlWithoutHash(url: string): string {
   } catch {
     return url;
   }
+}
+
+function decodeHtmlEntities(input: string): string {
+  return input
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#(\d+);/g, (_, code: string) => {
+      const parsed = Number(code);
+      return Number.isFinite(parsed) ? String.fromCharCode(parsed) : '';
+    });
+}
+
+function stripHtmlToText(html: string): string {
+  return decodeHtmlEntities(
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim(),
+  );
+}
+
+function extractTagText(html: string, pattern: RegExp): string {
+  const match = html.match(pattern);
+  return decodeHtmlEntities((match?.[1] ?? '').replace(/\s+/g, ' ').trim());
+}
+
+async function fetchPagePreview(url: string): Promise<{
+  ok: boolean;
+  url: string;
+  finalUrl?: string;
+  title?: string;
+  metaDescription?: string;
+  about?: string;
+  error?: string;
+}> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { ok: false, url, error: 'Invalid URL.' };
+  }
+
+  if (!/^https?:$/i.test(parsed.protocol)) {
+    return { ok: false, url, error: 'Only HTTP(S) URLs are supported.' };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SERP_PREVIEW_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(parsed.toString(), {
+      method: 'GET',
+      redirect: 'follow',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        url,
+        finalUrl: response.url || parsed.toString(),
+        error: `HTTP ${response.status}`,
+      };
+    }
+
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+    let html = '';
+    let loadedBytes = 0;
+
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        loadedBytes += value.byteLength;
+        if (loadedBytes > SERP_PREVIEW_MAX_BYTES) {
+          html += decoder.decode(value.subarray(0, Math.max(0, SERP_PREVIEW_MAX_BYTES - (loadedBytes - value.byteLength))), { stream: true });
+          break;
+        }
+        html += decoder.decode(value, { stream: true });
+      }
+      html += decoder.decode();
+    } else {
+      html = (await response.text()).slice(0, SERP_PREVIEW_MAX_BYTES);
+    }
+
+    const title = extractTagText(html, /<title[^>]*>([\s\S]*?)<\/title>/i);
+    const metaDescription = extractTagText(
+      html,
+      /<meta[^>]+name=["']description["'][^>]+content=["']([\s\S]*?)["'][^>]*>/i,
+    );
+    const visible = stripHtmlToText(html);
+    const aboutSource = metaDescription || visible;
+    const about = aboutSource.slice(0, SERP_PREVIEW_TEXT_LIMIT).trim();
+
+    return {
+      ok: true,
+      url,
+      finalUrl: response.url || parsed.toString(),
+      ...(title ? { title } : {}),
+      ...(metaDescription ? { metaDescription } : {}),
+      ...(about ? { about } : {}),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      url,
+      error: error instanceof Error ? error.message : 'Preview fetch failed.',
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+interface SerpAiModelResponse {
+  ranked_results?: Array<{
+    url?: unknown;
+    reason?: unknown;
+  }>;
+  flags?: {
+    commercial_intent?: unknown;
+    depth?: unknown;
+    neutrality?: unknown;
+  };
+}
+
+async function rankSerpResultsWithAi(options: {
+  apiKey: string;
+  userIntent: string;
+  results: Array<{
+    title: string;
+    url: string;
+    snippet: string;
+    domain: string;
+    preview?: string;
+  }>;
+}): Promise<{
+  rankedResults: Array<{ url: string; reason: string }>;
+  flags?: { commercial_intent?: string; depth?: string; neutrality?: string };
+}> {
+  const sanitizedResults = options.results
+    .map((item) => ({
+      title: String(item.title ?? '').trim().slice(0, 220),
+      url: String(item.url ?? '').trim(),
+      snippet: String(item.snippet ?? '').trim().slice(0, 520),
+      domain: String(item.domain ?? '').trim().toLowerCase().slice(0, 120),
+      preview: String(item.preview ?? '').trim().slice(0, 520),
+    }))
+    .filter((item) => /^https?:\/\//i.test(item.url))
+    .slice(0, 10);
+
+  if (sanitizedResults.length === 0) {
+    throw new Error('No valid results available for AI ranking.');
+  }
+
+  const prompt = [
+    'You rank Google search results for a user intent.',
+    'Use only the provided result data.',
+    'Return strict JSON only with this shape:',
+    '{"ranked_results":[{"url":"https://...","reason":"one sentence"}],"flags":{"commercial_intent":"low|medium|high","depth":"low|medium|high","neutrality":"low|medium|high"}}',
+    'Rules:',
+    '- Include every provided URL exactly once in ranked_results.',
+    '- Order from best to worst for the user intent.',
+    '- reason must be one short sentence, specific and non-generic.',
+    '- Prefer depth, relevance, and neutrality unless intent is explicitly commercial.',
+    `USER_INTENT: ${options.userIntent.slice(0, 400)}`,
+    `RESULTS_JSON: ${JSON.stringify(sanitizedResults)}`,
+  ].join('\n');
+
+  const response = await callOpenRouterJson<SerpAiModelResponse>({
+    apiKey: options.apiKey,
+    prompt,
+    timeoutMs: 35_000,
+  });
+
+  const byUrl = new Map(sanitizedResults.map((item) => [item.url, item]));
+  const used = new Set<string>();
+  const rankedResults: Array<{ url: string; reason: string }> = [];
+
+  for (const candidate of response.ranked_results ?? []) {
+    const url = typeof candidate?.url === 'string' ? candidate.url.trim() : '';
+    if (!url || !byUrl.has(url) || used.has(url)) continue;
+    used.add(url);
+    rankedResults.push({
+      url,
+      reason:
+        typeof candidate?.reason === 'string' && candidate.reason.trim().length > 0
+          ? candidate.reason.trim().slice(0, 240)
+          : 'Relevant match for your stated intent.',
+    });
+  }
+
+  for (const result of sanitizedResults) {
+    if (used.has(result.url)) continue;
+    rankedResults.push({
+      url: result.url,
+      reason: 'Fallback ordering due to partial AI ranking response.',
+    });
+  }
+
+  const normalizeFlag = (value: unknown): string | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim().toLowerCase();
+    return ['low', 'medium', 'high'].includes(normalized) ? normalized : undefined;
+  };
+
+  const flags = {
+    commercial_intent: normalizeFlag(response.flags?.commercial_intent),
+    depth: normalizeFlag(response.flags?.depth),
+    neutrality: normalizeFlag(response.flags?.neutrality),
+  };
+
+  return {
+    rankedResults,
+    ...(Object.values(flags).some(Boolean) ? { flags } : {}),
+  };
 }
 
 function contextMatchesTabUrl(context: TabContext | null, tabUrl: string): boolean {
@@ -1139,6 +1369,28 @@ export default defineBackground(() => {
             level,
           });
           sendResponse({ ok: true, summary });
+          return;
+        }
+
+        case 'SERP_FETCH_PAGE_PREVIEW': {
+          const preview = await fetchPagePreview(message.url);
+          sendResponse(preview);
+          return;
+        }
+
+        case 'SERP_AI_RANK_RESULTS': {
+          const apiKey = await getApiKey();
+          if (!apiKey) {
+            sendResponse({ ok: false, error: 'OpenRouter API key is not configured.' });
+            return;
+          }
+
+          const ranked = await rankSerpResultsWithAi({
+            apiKey,
+            userIntent: message.userIntent,
+            results: Array.isArray(message.results) ? message.results : [],
+          });
+          sendResponse({ ok: true, rankedResults: ranked.rankedResults, flags: ranked.flags });
           return;
         }
 
