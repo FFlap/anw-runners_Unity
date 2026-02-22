@@ -64,6 +64,21 @@ function getVideoIdFromUrl(url: string): string | null {
   }
 }
 
+function isYouTubeFullscreen(): boolean {
+  const fullscreenDocument = document as Document & {
+    webkitFullscreenElement?: Element | null;
+    msFullscreenElement?: Element | null;
+    mozFullScreenElement?: Element | null;
+  };
+
+  if (Boolean(fullscreenDocument.fullscreenElement)) return true;
+  if (Boolean(fullscreenDocument.webkitFullscreenElement)) return true;
+  if (Boolean(fullscreenDocument.msFullscreenElement)) return true;
+  if (Boolean(fullscreenDocument.mozFullScreenElement)) return true;
+
+  return document.querySelector('.html5-video-player.ytp-fullscreen') !== null;
+}
+
 function normalizeUrlWithoutHash(url: string): string {
   try {
     const parsed = new URL(url);
@@ -903,6 +918,15 @@ export default defineContentScript({
         return;
       }
 
+      if (isYouTubeFullscreen()) {
+        if (dictationActive) {
+          stopDictation();
+        }
+        panelRoot?.remove();
+        panelRoot = null;
+        return;
+      }
+
       const host = findPanelHost();
       if (!host) return;
 
@@ -1581,6 +1605,23 @@ export default defineContentScript({
       updateCurrentTranscriptHighlight();
     };
 
+    const onFullscreenChange = () => {
+      if (!isWatchUrl(location.href)) return;
+
+      if (isYouTubeFullscreen()) {
+        if (dictationActive) {
+          stopDictation();
+        }
+        panelRoot?.remove();
+        panelRoot = null;
+        return;
+      }
+
+      ensurePanelMounted();
+      syncVideoListener();
+      render();
+    };
+
     const applyEmbeddedResponse = (response: EmbeddedStateResponse) => {
       tabId = response.tabId ?? tabId;
       const currentUrl = location.href;
@@ -1712,6 +1753,8 @@ export default defineContentScript({
     ext.storage.onChanged.addListener(onStorageChanged);
 
     initializeDictation();
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange as EventListener);
     ensurePanelMounted();
     syncVideoListener();
     render();
@@ -1803,6 +1846,8 @@ export default defineContentScript({
         watchedVideo.removeEventListener('seeking', onVideoTimelineUpdate);
         watchedVideo.removeEventListener('seeked', onVideoTimelineUpdate);
       }
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', onFullscreenChange as EventListener);
       ext.runtime.onMessage.removeListener(onMessage as any);
       ext.storage.onChanged.removeListener(onStorageChanged);
     });
