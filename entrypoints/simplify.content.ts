@@ -1414,7 +1414,7 @@ function installPageReaderStyles() {
   style.textContent = `
     body[${PAGE_READER_MODE_ATTR}="true"] {
       background: #ffffff !important;
-      color: #161312 !important;
+      color: #000000 !important;
     }
     body[${PAGE_READER_MODE_ATTR}="true"] > :not(#${PAGE_READER_ROOT_ID}):not(script):not(style) {
       display: none !important;
@@ -1422,7 +1422,7 @@ function installPageReaderStyles() {
     #${PAGE_READER_ROOT_ID} {
       min-height: 100vh;
       background: #ffffff;
-      color: #161312;
+      color: #000000;
       font-family: "Georgia", "Times New Roman", serif;
       line-height: 1.62;
     }
@@ -1432,7 +1432,7 @@ function installPageReaderStyles() {
       padding: 42px 24px 72px;
     }
     #${PAGE_READER_ROOT_ID} .unity-pr-head {
-      border-bottom: 1px solid rgba(32, 24, 16, 0.12);
+      border-bottom: 2px solid #000;
       padding-bottom: 16px;
       margin-bottom: 22px;
     }
@@ -1441,27 +1441,35 @@ function installPageReaderStyles() {
       font-size: clamp(28px, 4vw, 38px);
       line-height: 1.2;
       letter-spacing: -0.01em;
-      color: #1a120e;
+      color: #000;
     }
     #${PAGE_READER_ROOT_ID} .unity-pr-byline {
       margin: 10px 0 0;
-      font: 600 14px/1.4 "DM Sans", system-ui, sans-serif;
-      color: #6e5f54;
+      font: 700 12px/1.4 "Plus Jakarta Sans", ui-sans-serif, -apple-system, sans-serif;
+      color: #666;
       letter-spacing: 0.01em;
+      text-transform: uppercase;
     }
     #${PAGE_READER_ROOT_ID} .unity-pr-exit {
       margin-top: 14px;
-      border: 1px solid #d2c4b8;
-      border-radius: 999px;
-      background: #fffdfa;
-      color: #38291f;
-      font: 600 12px/1 "DM Sans", system-ui, sans-serif;
-      padding: 8px 12px;
+      border: 2px solid #000;
+      border-radius: 20px;
+      background: #fff;
+      color: #000;
+      font: 700 12px/1 "Plus Jakarta Sans", ui-sans-serif, -apple-system, sans-serif;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 10px 16px;
       cursor: pointer;
+      transition: all 0.2s ease;
     }
     #${PAGE_READER_ROOT_ID} .unity-pr-exit:hover {
-      border-color: #b78f6f;
-      color: #7a3c13;
+      background: #000;
+      color: #fff;
+    }
+    #${PAGE_READER_ROOT_ID} .unity-pr-exit:focus-visible {
+      outline: 3px solid #000;
+      outline-offset: 2px;
     }
     #${PAGE_READER_ROOT_ID} .unity-pr-body {
       display: flex;
@@ -1482,8 +1490,8 @@ function installPageReaderStyles() {
     #${PAGE_READER_ROOT_ID} .unity-pr-body h6 {
       margin: 16px 0 2px;
       line-height: 1.28;
-      color: #1f1712;
-      font-family: "DM Sans", system-ui, sans-serif;
+      color: #000;
+      font-family: "Plus Jakarta Sans", ui-sans-serif, -apple-system, sans-serif;
     }
     #${PAGE_READER_ROOT_ID} .unity-pr-body h1 { font-size: 31px; }
     #${PAGE_READER_ROOT_ID} .unity-pr-body h2 { font-size: 27px; }
@@ -1492,9 +1500,9 @@ function installPageReaderStyles() {
     #${PAGE_READER_ROOT_ID} .unity-pr-body h5,
     #${PAGE_READER_ROOT_ID} .unity-pr-body h6 { font-size: 21px; }
     #${PAGE_READER_ROOT_ID} .unity-pr-body blockquote {
-      border-left: 3px solid rgba(164, 118, 81, 0.55);
+      border-left: 3px solid #000;
       padding-left: 12px;
-      color: #514137;
+      color: #333;
       font-style: italic;
     }
     #${PAGE_READER_ROOT_ID} .unity-pr-body ul {
