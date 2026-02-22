@@ -2,7 +2,6 @@ import type { AutofillProfile, ChatSession, ScanReport, TabContext } from '@/lib
 
 const API_KEY_STORAGE_KEY = 'openrouter_api_key';
 const LEGACY_API_KEY_STORAGE_KEY = 'gemini_api_key';
-export const COLOR_BLIND_MODE_STORAGE_KEY = 'unity_color_blind_mode';
 export const COLOR_BLIND_FILTER_STORAGE_KEY = 'unity_color_blind_filter';
 export const REDUCE_MOTION_STORAGE_KEY = 'unity_reduce_motion';
 export const AUDIO_RATE_STORAGE_KEY = 'unity_audio_rate';
@@ -106,15 +105,6 @@ export async function getApiKey(): Promise<string | null> {
 
 export async function hasApiKey(): Promise<boolean> {
   return (await getApiKey()) !== null;
-}
-
-export async function getColorBlindModeEnabled(): Promise<boolean> {
-  const stored = await ext.storage.local.get(COLOR_BLIND_MODE_STORAGE_KEY);
-  return Boolean(stored?.[COLOR_BLIND_MODE_STORAGE_KEY]);
-}
-
-export async function setColorBlindModeEnabled(enabled: boolean): Promise<void> {
-  await ext.storage.local.set({ [COLOR_BLIND_MODE_STORAGE_KEY]: enabled });
 }
 
 export function normalizeColorBlindFilter(value: unknown): ColorBlindFilterOption {

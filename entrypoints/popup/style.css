@@ -41,7 +41,6 @@
 
   --unity-focus-ring: transparent;
   --unity-focus-ring-shadow: transparent;
-  --unity-cbm-outline: transparent;
 }
 
 * {
@@ -74,50 +73,6 @@ select {
   box-shadow: 0 20px 40px rgba(0,0,0,0.1);
   overflow: hidden;
   border: none;
-}
-
-.unity-shell--cbm {
-  --unity-bg: #f3f6f9;
-  --unity-surface: #ffffff;
-  --unity-border: #79889c;
-  --unity-text: #14202d;
-  --unity-muted: #304256;
-  --unity-accent: #085fae;
-  --unity-accent-strong: #024884;
-  --unity-user: #0d4d8a;
-  --unity-user-bg: #e6f0fa;
-  --unity-user-border: #5f89b7;
-  --unity-assistant-bg: #fff5d8;
-  --unity-danger: #8f1f2f;
-  --unity-danger-bg: #f8e8eb;
-
-  --unity-shell-grad-start: #fdfefe;
-  --unity-shell-grad-end: #edf2f7;
-  --unity-header-bg: #f8fbff;
-  --unity-status-bg: #eef4fb;
-  --unity-composer-bg: #f7fbff;
-  --unity-empty-chat-bg: #f4f8fd;
-  --unity-source-chip-bg: #fdfefe;
-  --unity-input-bg: #ffffff;
-  --unity-modal-backdrop: rgba(9, 20, 36, 0.35);
-  --unity-btn-primary-text: #ffffff;
-
-  --unity-pill-idle-bg: #e8edf4;
-  --unity-pill-idle-text: #2f4052;
-  --unity-pill-idle-border: #7f92a8;
-  --unity-pill-progress-bg: #e8f1fb;
-  --unity-pill-progress-text: #0f4c83;
-  --unity-pill-progress-border: #5f89b7;
-  --unity-pill-done-bg: #e8f4ec;
-  --unity-pill-done-text: #245c39;
-  --unity-pill-done-border: #4e8f6f;
-  --unity-pill-error-bg: #f8e8eb;
-  --unity-pill-error-text: #8f1f2f;
-  --unity-pill-error-border: #c26d79;
-
-  --unity-focus-ring: #005fcc;
-  --unity-focus-ring-shadow: rgba(0, 95, 204, 0.3);
-  --unity-cbm-outline: rgba(16, 64, 112, 0.16);
 }
 
 .mode-switch {
@@ -1124,112 +1079,6 @@ select {
 
 .modal-section .audio-follow-row {
   margin-top: 8px;
-}
-
-.unity-shell--cbm .pill {
-  border-width: 2px;
-  gap: 4px;
-  font-weight: 700;
-  min-width: 96px;
-}
-
-.unity-shell--cbm .pill--idle::before {
-  content: 'IDLE';
-  font-size: 9px;
-}
-
-.unity-shell--cbm .pill--extracting::before,
-.unity-shell--cbm .pill--analyzing::before,
-.unity-shell--cbm .pill--highlighting::before {
-  content: 'WORK';
-  font-size: 9px;
-}
-
-.unity-shell--cbm .pill--done::before {
-  content: 'OK';
-  font-size: 9px;
-}
-
-.unity-shell--cbm .pill--error::before {
-  content: 'ERR';
-  font-size: 9px;
-}
-
-.unity-shell--cbm .icon-btn:hover:not(:disabled),
-.unity-shell--cbm .ghost-btn:hover:not(:disabled),
-.unity-shell--cbm .primary-btn:hover:not(:disabled),
-.unity-shell--cbm .source-chip:hover:not(:disabled),
-.unity-shell--cbm .mode-switch:hover:not(:disabled) {
-  border-width: 2px;
-  box-shadow: 0 0 0 2px var(--unity-cbm-outline);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.unity-shell--cbm .source-chip {
-  border-width: 2px;
-  font-weight: 600;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.unity-shell--cbm .panel-tab--active {
-  border-width: 2px;
-}
-
-.unity-shell--cbm .audio-current-line {
-  border-left-width: 5px;
-  outline: 2px solid var(--unity-cbm-outline);
-  outline-offset: 1px;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.unity-shell--cbm .bubble--user,
-.unity-shell--cbm .bubble--assistant {
-  border-left: 4px solid;
-}
-
-.unity-shell--cbm .bubble--user {
-  border-left-color: var(--unity-user);
-}
-
-.unity-shell--cbm .bubble--assistant {
-  border-left-color: var(--unity-accent);
-}
-
-.unity-shell--cbm .bubble--user.bubble--failed {
-  border-left-color: var(--unity-danger);
-  border-color: var(--unity-danger);
-  background: var(--unity-danger-bg);
-}
-
-.unity-shell--cbm .bubble-local-state--failed {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.unity-shell--cbm .error-text {
-  border-left: 4px solid var(--unity-danger);
-  border-radius: 8px;
-  background: var(--unity-danger-bg);
-  padding: 6px 8px;
-  font-weight: 600;
-}
-
-.unity-shell--cbm .error-text::before {
-  content: 'Error: ';
-}
-
-.unity-shell--cbm .tab-url {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.unity-shell--cbm :is(button, textarea, input, [role='switch']):focus-visible {
-  outline: 3px solid var(--unity-focus-ring);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 3px var(--unity-focus-ring-shadow);
 }
 
 .spin {

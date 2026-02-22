@@ -12,7 +12,6 @@ import {
   AUDIO_FOLLOW_MODE_STORAGE_KEY,
   AUDIO_RATE_STORAGE_KEY,
   COLOR_BLIND_FILTER_STORAGE_KEY,
-  COLOR_BLIND_MODE_STORAGE_KEY,
   FORCED_FONT_STORAGE_KEY,
   REDUCE_MOTION_STORAGE_KEY,
   normalizeColorBlindFilter,
@@ -33,7 +32,6 @@ const CARD_ID = 'cred-selection-result-card';
 const AUDIO_FOLLOW_PANEL_ID = 'unity-audio-follow-panel';
 const UI_ATTR = 'data-cred-selection-ui';
 const MOTION_EXEMPT_ATTR = 'data-unity-motion-exempt';
-const PAGE_MODE_ATTR = 'data-unity-color-blind-page';
 const PAGE_COLOR_BLIND_FILTER_ATTR = 'data-unity-color-blind-filter';
 const PAGE_FONT_ATTR = 'data-unity-forced-font';
 const PAGE_REDUCED_MOTION_ATTR = 'data-unity-reduced-motion';
@@ -1082,22 +1080,6 @@ function installStyles() {
       box-shadow: 0 10px 22px var(--cred-ab-shadow);
       font-family: "DM Sans", system-ui, sans-serif;
     }
-    #${ACTION_BAR_ID}[data-color-blind-mode="true"] {
-      --cred-ab-bg: #fbfdff;
-      --cred-ab-border: #73889f;
-      --cred-ab-shadow: rgba(9, 34, 61, 0.24);
-      --cred-ab-btn-bg: #0b5da8;
-      --cred-ab-btn-text: #ffffff;
-      --cred-ab-level-border: #7088a1;
-      --cred-ab-level-bg: #ffffff;
-      --cred-ab-level-text: #30465d;
-      --cred-ab-level-active-bg: #e6f0fb;
-      --cred-ab-level-active-border: #0b5da8;
-      --cred-ab-level-active-text: #0b3f70;
-      --cred-ab-focus: #005fcc;
-      --cred-ab-focus-shadow: rgba(0, 95, 204, 0.32);
-      --cred-ab-outline: rgba(7, 65, 121, 0.2);
-    }
     #${ACTION_BAR_ID} .cred-action-btn {
       border: 0;
       border-radius: 999px;
@@ -1111,11 +1093,6 @@ function installStyles() {
     }
     #${ACTION_BAR_ID} .cred-action-btn:hover {
       filter: brightness(1.06);
-    }
-    #${ACTION_BAR_ID}[data-color-blind-mode="true"] .cred-action-btn:hover {
-      text-decoration: underline;
-      text-underline-offset: 2px;
-      box-shadow: 0 0 0 2px var(--cred-ab-outline);
     }
     #${ACTION_BAR_ID} .cred-levels {
       display: inline-flex;
@@ -1139,15 +1116,6 @@ function installStyles() {
     }
     #${ACTION_BAR_ID} .cred-level-btn:hover {
       filter: brightness(0.98);
-    }
-    #${ACTION_BAR_ID}[data-color-blind-mode="true"] .cred-level-btn[data-active="true"] {
-      border-width: 2px;
-      text-decoration: underline;
-      text-underline-offset: 2px;
-    }
-    #${ACTION_BAR_ID}[data-color-blind-mode="true"] .cred-level-btn[data-active="true"]::before {
-      content: "✓ ";
-      font-weight: 900;
     }
     #${ACTION_BAR_ID} .cred-action-btn:focus-visible,
     #${ACTION_BAR_ID} .cred-level-btn:focus-visible,
@@ -1179,20 +1147,6 @@ function installStyles() {
       box-shadow: 0 18px 34px var(--cred-card-shadow);
       font-family: "DM Sans", system-ui, sans-serif;
       overflow: hidden;
-    }
-    #${CARD_ID}[data-color-blind-mode="true"] {
-      --cred-card-border: #7088a1;
-      --cred-card-bg: #fcfeff;
-      --cred-card-text: #182e44;
-      --cred-card-shadow: rgba(9, 34, 61, 0.3);
-      --cred-card-head-border: #d2deea;
-      --cred-card-head-bg: #f4f9ff;
-      --cred-card-title: #2d4358;
-      --cred-card-close: #355067;
-      --cred-card-close-hover: rgba(11, 93, 168, 0.12);
-      --cred-card-loading: #3a536c;
-      --cred-card-error: #8d1f31;
-      --cred-card-status-stripe: #8ea4bb;
     }
     #${CARD_ID} .cred-selection-head {
       display: flex;
@@ -1237,37 +1191,6 @@ function installStyles() {
     #${CARD_ID}[data-state="error"] .cred-selection-body {
       color: var(--cred-card-error);
     }
-    #${CARD_ID}[data-color-blind-mode="true"] .cred-selection-body {
-      border-left: 5px solid var(--cred-card-status-stripe);
-      padding-left: 10px;
-    }
-    #${CARD_ID}[data-color-blind-mode="true"][data-state="loading"] .cred-selection-body {
-      border-left-color: #4f6f90;
-    }
-    #${CARD_ID}[data-color-blind-mode="true"][data-state="loading"] .cred-selection-body::before {
-      content: "Loading: ";
-      font-style: normal;
-      font-weight: 700;
-      text-decoration: underline;
-      text-underline-offset: 2px;
-    }
-    #${CARD_ID}[data-color-blind-mode="true"][data-state="error"] .cred-selection-body {
-      border-left-color: #8d1f31;
-    }
-    #${CARD_ID}[data-color-blind-mode="true"][data-state="error"] .cred-selection-body::before {
-      content: "Error: ";
-      font-weight: 700;
-      text-decoration: underline;
-      text-underline-offset: 2px;
-    }
-    #${CARD_ID}[data-color-blind-mode="true"][data-state="done"] .cred-selection-body {
-      border-left-color: #0b5da8;
-    }
-    #${CARD_ID}[data-color-blind-mode="true"] :is(.cred-action-btn, .cred-level-btn, .cred-selection-close):focus-visible {
-      outline: 3px solid var(--cred-ab-focus);
-      outline-offset: 2px;
-      box-shadow: 0 0 0 3px var(--cred-ab-focus-shadow);
-    }
     #${AUDIO_FOLLOW_PANEL_ID} {
       --unity-afp-bg: #fffcf8;
       --unity-afp-border: #e8dbcf;
@@ -1291,17 +1214,6 @@ function installStyles() {
       box-shadow: 0 16px 30px rgba(24, 18, 13, 0.24);
       font-family: "DM Sans", system-ui, sans-serif;
       overflow: hidden;
-    }
-    #${AUDIO_FOLLOW_PANEL_ID}[data-color-blind-mode="true"] {
-      --unity-afp-bg: #fbfdff;
-      --unity-afp-border: #7088a1;
-      --unity-afp-text: #182e44;
-      --unity-afp-muted: #3a536c;
-      --unity-afp-line-border: #cfdcec;
-      --unity-afp-line-bg: #f8fbff;
-      --unity-afp-current-border: #005fcc;
-      --unity-afp-current-bg: #e7f0fb;
-      --unity-afp-current-shadow: rgba(0, 95, 204, 0.28);
     }
     #${AUDIO_FOLLOW_PANEL_ID} .unity-afp-head {
       padding: 8px 10px;
@@ -1372,22 +1284,6 @@ function installStyles() {
       --unity-page-follow-context-fill: rgba(255, 240, 210, 0.08);
       --unity-page-follow-context-border: rgba(255, 203, 122, 0.34);
       --unity-page-follow-context-outline: rgba(255, 203, 122, 0.2);
-    }
-    html[${PAGE_MODE_ATTR}="true"] .unity-audio-page-follow-host {
-      --unity-page-follow-current-fill: rgba(199, 222, 255, 0.26);
-      --unity-page-follow-current-border: rgba(0, 95, 204, 0.98);
-      --unity-page-follow-current-outline: rgba(0, 95, 204, 0.28);
-      --unity-page-follow-context-fill: rgba(214, 231, 255, 0.1);
-      --unity-page-follow-context-border: rgba(0, 95, 204, 0.38);
-      --unity-page-follow-context-outline: rgba(0, 95, 204, 0.2);
-    }
-    html[${PAGE_MODE_ATTR}="true"] .unity-audio-page-follow-host[data-surface="dark"] {
-      --unity-page-follow-current-fill: rgba(180, 213, 255, 0.2);
-      --unity-page-follow-current-border: rgba(143, 201, 255, 0.98);
-      --unity-page-follow-current-outline: rgba(143, 201, 255, 0.35);
-      --unity-page-follow-context-fill: rgba(214, 231, 255, 0.08);
-      --unity-page-follow-context-border: rgba(143, 201, 255, 0.34);
-      --unity-page-follow-context-outline: rgba(143, 201, 255, 0.2);
     }
     .unity-audio-page-follow-line {
       position: absolute;
@@ -1542,152 +1438,20 @@ function installPageColorBlindStyles() {
   const style = document.createElement('style');
   style.id = PAGE_STYLE_ID;
   style.textContent = `
-    html[${PAGE_MODE_ATTR}="true"] {
-      --unity-page-focus: #005fcc;
-      --unity-page-focus-shadow: rgba(0, 95, 204, 0.3);
-      --unity-page-selected: #0b5da8;
-      --unity-page-error: #8d1f31;
-      --unity-page-success: #1f5f3a;
-      --unity-page-warning: #7a5400;
-      --unity-page-selected-tint: rgba(11, 93, 168, 0.13);
-      --unity-page-error-tint: rgba(141, 31, 49, 0.1);
-      --unity-page-success-tint: rgba(31, 95, 58, 0.1);
-      --unity-page-warning-tint: rgba(122, 84, 0, 0.1);
-      --unity-page-link: #0a4f8f;
-      --unity-page-link-visited: #5a3f88;
-    }
-
-    html[${PAGE_MODE_ATTR}="true"][${PAGE_COLOR_BLIND_FILTER_ATTR}="protanopia"] body > *:not([${UI_ATTR}="true"]) {
+    html[${PAGE_COLOR_BLIND_FILTER_ATTR}="protanopia"] body > *:not([${UI_ATTR}="true"]) {
       filter: url("#${COLOR_BLIND_FILTER_IDS.protanopia}");
     }
 
-    html[${PAGE_MODE_ATTR}="true"][${PAGE_COLOR_BLIND_FILTER_ATTR}="deuteranopia"] body > *:not([${UI_ATTR}="true"]) {
+    html[${PAGE_COLOR_BLIND_FILTER_ATTR}="deuteranopia"] body > *:not([${UI_ATTR}="true"]) {
       filter: url("#${COLOR_BLIND_FILTER_IDS.deuteranopia}");
     }
 
-    html[${PAGE_MODE_ATTR}="true"][${PAGE_COLOR_BLIND_FILTER_ATTR}="tritanopia"] body > *:not([${UI_ATTR}="true"]) {
+    html[${PAGE_COLOR_BLIND_FILTER_ATTR}="tritanopia"] body > *:not([${UI_ATTR}="true"]) {
       filter: url("#${COLOR_BLIND_FILTER_IDS.tritanopia}");
     }
 
-    html[${PAGE_MODE_ATTR}="true"][${PAGE_COLOR_BLIND_FILTER_ATTR}="achromatopsia"] body > *:not([${UI_ATTR}="true"]) {
+    html[${PAGE_COLOR_BLIND_FILTER_ATTR}="achromatopsia"] body > *:not([${UI_ATTR}="true"]) {
       filter: url("#${COLOR_BLIND_FILTER_IDS.achromatopsia}");
-    }
-
-    html[${PAGE_MODE_ATTR}="true"] a {
-      color: var(--unity-page-link) !important;
-      text-decoration-line: underline !important;
-      text-decoration-thickness: max(2px, 0.11em) !important;
-      text-underline-offset: 2px !important;
-    }
-
-    html[${PAGE_MODE_ATTR}="true"] a:visited {
-      color: var(--unity-page-link-visited) !important;
-      text-decoration-style: dotted !important;
-    }
-
-    html[${PAGE_MODE_ATTR}="true"] :is(
-      button,
-      [role="button"],
-      a,
-      input,
-      select,
-      textarea,
-      summary,
-      [tabindex]:not([tabindex="-1"])
-    ):focus-visible {
-      outline: 3px solid var(--unity-page-focus) !important;
-      outline-offset: 2px !important;
-      box-shadow: 0 0 0 3px var(--unity-page-focus-shadow) !important;
-    }
-
-    html[${PAGE_MODE_ATTR}="true"] :is(
-      button,
-      [role="button"],
-      [role="tab"],
-      [role="option"],
-      [role="menuitem"],
-      [role="link"],
-      a,
-      summary,
-      [tabindex]:not([tabindex="-1"])
-    ):is(
-      [aria-current="page"],
-      [aria-selected="true"],
-      [aria-pressed="true"],
-      [aria-expanded="true"],
-      [data-selected="true"],
-      .is-active,
-      .active,
-      .selected,
-      .current
-    ) {
-      box-shadow: inset 5px 0 0 var(--unity-page-selected) !important;
-      outline: 2px solid var(--unity-page-selected) !important;
-      outline-offset: 1px !important;
-      background-image: linear-gradient(var(--unity-page-selected-tint), var(--unity-page-selected-tint)) !important;
-    }
-
-    html[${PAGE_MODE_ATTR}="true"] :is(
-      [aria-invalid="true"],
-      [data-status="error"],
-      [data-state="error"],
-      [role="alert"],
-      [aria-live="assertive"],
-      .error-message,
-      .form-error,
-      .field-error,
-      .has-error,
-      input.error,
-      textarea.error,
-      select.error,
-      input.invalid,
-      textarea.invalid,
-      select.invalid
-    ) {
-      box-shadow: inset 5px 0 0 var(--unity-page-error) !important;
-      background-image: repeating-linear-gradient(
-        -45deg,
-        var(--unity-page-error-tint) 0 8px,
-        transparent 8px 16px
-      ) !important;
-    }
-
-    html[${PAGE_MODE_ATTR}="true"] :is(
-      [data-status="success"],
-      [data-state="success"],
-      .success-message,
-      .form-success,
-      .field-success,
-      .valid,
-      .ok,
-      input.valid,
-      textarea.valid,
-      select.valid
-    ) {
-      box-shadow: inset 5px 0 0 var(--unity-page-success) !important;
-      background-image: repeating-linear-gradient(
-        45deg,
-        var(--unity-page-success-tint) 0 8px,
-        transparent 8px 16px
-      ) !important;
-    }
-
-    html[${PAGE_MODE_ATTR}="true"] :is(
-      [data-status="warning"],
-      [data-state="warning"],
-      [role="status"][data-status="warning"],
-      .warning-message,
-      .form-warning,
-      .field-warning,
-      .warning,
-      .warn
-    ) {
-      box-shadow: inset 5px 0 0 var(--unity-page-warning) !important;
-      background-image: repeating-linear-gradient(
-        90deg,
-        var(--unity-page-warning-tint) 0 6px,
-        transparent 6px 12px
-      ) !important;
     }
   `;
   document.documentElement.appendChild(style);
@@ -1785,15 +1549,9 @@ function installPageReducedMotionStyles() {
   document.documentElement.appendChild(style);
 }
 
-function applyPageColorBlindMode(enabled: boolean, filter: ColorBlindFilterOption) {
-  if (enabled) {
-    document.documentElement.setAttribute(PAGE_MODE_ATTR, 'true');
-  } else {
-    document.documentElement.removeAttribute(PAGE_MODE_ATTR);
-  }
-
+function applyPageColorBlindFilter(filter: ColorBlindFilterOption) {
   const normalizedFilter = normalizeColorBlindFilter(filter);
-  if (enabled && normalizedFilter !== 'none') {
+  if (normalizedFilter !== 'none') {
     document.documentElement.setAttribute(PAGE_COLOR_BLIND_FILTER_ATTR, normalizedFilter);
     return;
   }
@@ -2038,13 +1796,11 @@ function createActionBar(
   initialLevel: RewriteLevel,
   onAction: (action: SelectionAction) => void,
   onLevelChange: (level: RewriteLevel) => void,
-  colorBlindModeEnabled: boolean,
 ): HTMLElement {
   const root = document.createElement('div');
   root.id = ACTION_BAR_ID;
   root.setAttribute(UI_ATTR, 'true');
   root.setAttribute(MOTION_EXEMPT_ATTR, 'true');
-  root.setAttribute('data-color-blind-mode', String(colorBlindModeEnabled));
   root.innerHTML = `
     <button type="button" class="cred-action-btn" data-action="simplify">${ACTION_CONFIG.simplify.label}</button>
     <button type="button" class="cred-action-btn" data-action="summarize">${ACTION_CONFIG.summarize.label}</button>
@@ -2076,13 +1832,12 @@ function createActionBar(
   return root;
 }
 
-function createCard(onClose: () => void, colorBlindModeEnabled: boolean): HTMLElement {
+function createCard(onClose: () => void): HTMLElement {
   const card = document.createElement('section');
   card.id = CARD_ID;
   card.setAttribute('data-state', 'idle');
   card.setAttribute(UI_ATTR, 'true');
   card.setAttribute(MOTION_EXEMPT_ATTR, 'true');
-  card.setAttribute('data-color-blind-mode', String(colorBlindModeEnabled));
   card.innerHTML = `
     <div class="cred-selection-head">
       <span class="cred-selection-title"></span>
@@ -2175,7 +1930,6 @@ export default defineContentScript({
     let selectedLevel: RewriteLevel = 2;
     let pointerSelectionInProgress = false;
     let lastPointerAnchor: PointerAnchor | null = null;
-    let colorBlindModeEnabled = false;
     let colorBlindFilter: ColorBlindFilterOption = 'none';
     let reduceMotionEnabled = false;
     let forcedFont: ForcedFontOption = 'none';
@@ -2350,18 +2104,6 @@ export default defineContentScript({
     readerModeEnabled =
       Boolean(readerModeRoot?.isConnected) &&
       document.body?.getAttribute(PAGE_READER_MODE_ATTR) === 'true';
-
-    const applyColorBlindModeToUi = () => {
-      if (actionBar) {
-        actionBar.setAttribute('data-color-blind-mode', String(colorBlindModeEnabled));
-      }
-      if (card) {
-        card.setAttribute('data-color-blind-mode', String(colorBlindModeEnabled));
-      }
-      if (audioFollowPanel) {
-        audioFollowPanel.setAttribute('data-color-blind-mode', String(colorBlindModeEnabled));
-      }
-    };
 
     const ensureForcedFontObserver = () => {
       if (forcedFontObserver) return;
@@ -3260,7 +3002,6 @@ export default defineContentScript({
         root.id = AUDIO_FOLLOW_PANEL_ID;
         root.setAttribute(UI_ATTR, 'true');
         root.setAttribute(MOTION_EXEMPT_ATTR, 'true');
-        root.setAttribute('data-color-blind-mode', String(colorBlindModeEnabled));
         root.innerHTML = `
           <div class="unity-afp-head">
             <p class="unity-afp-title">Audio Follow</p>
@@ -3273,7 +3014,6 @@ export default defineContentScript({
         audioFollowMeta = root.querySelector<HTMLElement>('.unity-afp-meta');
         audioFollowLinesHost = root.querySelector<HTMLElement>('.unity-afp-lines');
       }
-      applyColorBlindModeToUi();
     };
 
     const renderAudioFollowLines = () => {
@@ -3561,10 +3301,9 @@ export default defineContentScript({
       if (!card) {
         card = createCard(() => {
           hideAllUi();
-        }, colorBlindModeEnabled);
+        });
         document.documentElement.appendChild(card);
       }
-      applyColorBlindModeToUi();
       card.dataset.state = state;
       const title = card.querySelector<HTMLElement>('.cred-selection-title');
       const body = card.querySelector<HTMLElement>('.cred-selection-body');
@@ -3606,11 +3345,9 @@ export default defineContentScript({
           (level) => {
             selectedLevel = level;
           },
-          colorBlindModeEnabled,
         );
         document.documentElement.appendChild(actionBar);
       }
-      applyColorBlindModeToUi();
       setActionBarLevel(actionBar, selectedLevel);
       activeSelection = snapshot;
       positionNearSelection(actionBar, snapshot);
@@ -3855,14 +3592,9 @@ export default defineContentScript({
       if (REDUCE_MOTION_STORAGE_KEY in changes) {
         applyReducedMotion(Boolean(changes[REDUCE_MOTION_STORAGE_KEY]?.newValue));
       }
-      if (COLOR_BLIND_MODE_STORAGE_KEY in changes) {
-        colorBlindModeEnabled = Boolean(changes[COLOR_BLIND_MODE_STORAGE_KEY]?.newValue);
-        applyColorBlindModeToUi();
-        applyPageColorBlindMode(colorBlindModeEnabled, colorBlindFilter);
-      }
       if (COLOR_BLIND_FILTER_STORAGE_KEY in changes) {
         colorBlindFilter = normalizeColorBlindFilter(changes[COLOR_BLIND_FILTER_STORAGE_KEY]?.newValue);
-        applyPageColorBlindMode(colorBlindModeEnabled, colorBlindFilter);
+        applyPageColorBlindFilter(colorBlindFilter);
       }
       if (FORCED_FONT_STORAGE_KEY in changes) {
         forcedFont = normalizeForcedFont(changes[FORCED_FONT_STORAGE_KEY]?.newValue);
@@ -3884,7 +3616,6 @@ export default defineContentScript({
     void ext.storage.local
       .get([
         REDUCE_MOTION_STORAGE_KEY,
-        COLOR_BLIND_MODE_STORAGE_KEY,
         COLOR_BLIND_FILTER_STORAGE_KEY,
         FORCED_FONT_STORAGE_KEY,
         AUDIO_RATE_STORAGE_KEY,
@@ -3892,14 +3623,12 @@ export default defineContentScript({
       ])
       .then((stored) => {
         reduceMotionEnabled = Boolean(stored?.[REDUCE_MOTION_STORAGE_KEY]);
-        colorBlindModeEnabled = Boolean(stored?.[COLOR_BLIND_MODE_STORAGE_KEY]);
         colorBlindFilter = normalizeColorBlindFilter(stored?.[COLOR_BLIND_FILTER_STORAGE_KEY]);
         forcedFont = normalizeForcedFont(stored?.[FORCED_FONT_STORAGE_KEY]);
         audioRate = clampAudioRate(Number(stored?.[AUDIO_RATE_STORAGE_KEY] ?? 1));
         audioFollowModeEnabled = Boolean(stored?.[AUDIO_FOLLOW_MODE_STORAGE_KEY]);
         applyReducedMotion(reduceMotionEnabled);
-        applyColorBlindModeToUi();
-        applyPageColorBlindMode(colorBlindModeEnabled, colorBlindFilter);
+        applyPageColorBlindFilter(colorBlindFilter);
         applyForcedPageFont(forcedFont);
         syncForcedFontRescanLoop();
         syncAudioFollowPanel();
