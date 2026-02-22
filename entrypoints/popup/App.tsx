@@ -19,14 +19,12 @@ import {
   getAutofillProfile,
   getAudioFollowModeEnabled,
   getAudioRate,
-  getColorBlindModeEnabled,
   getForcedFont,
   getReduceMotionEnabled,
   saveAutofillProfile,
   setColorBlindFilter,
   setAudioFollowModeEnabled,
   setAudioRate,
-  setColorBlindModeEnabled,
   setForcedFont,
   setReduceMotionEnabled,
   type ColorBlindFilterOption,
@@ -53,7 +51,6 @@ import {
 const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeof browser;
 const API_KEY_STORAGE_KEY = 'openrouter_api_key';
 const LEGACY_API_KEY_STORAGE_KEY = 'gemini_api_key';
-const COLOR_BLIND_SWITCH_ID = 'unity-color-blind-mode-switch';
 const COLOR_BLIND_TYPE_SELECT_ID = 'unity-color-blind-type-select';
 const REDUCE_MOTION_SWITCH_ID = 'unity-reduce-motion-switch';
 const FORCED_FONT_SELECT_ID = 'unity-forced-font-select';
@@ -425,11 +422,9 @@ function SettingsModal({
   open,
   onClose,
   hasApiKey,
-  isColorBlindMode,
   colorBlindFilter,
   isReduceMotion,
   forcedFont,
-  onToggleColorBlindMode,
   onColorBlindFilterChange,
   onToggleReduceMotion,
   onForcedFontChange,
@@ -438,11 +433,9 @@ function SettingsModal({
   open: boolean;
   onClose: () => void;
   hasApiKey: boolean;
-  isColorBlindMode: boolean;
   colorBlindFilter: ColorBlindFilterOption;
   isReduceMotion: boolean;
   forcedFont: ForcedFontOption;
-  onToggleColorBlindMode: () => void | Promise<void>;
   onColorBlindFilterChange: (filter: ColorBlindFilterOption) => void | Promise<void>;
   onToggleReduceMotion: () => void | Promise<void>;
   onForcedFontChange: (font: ForcedFontOption) => void | Promise<void>;
@@ -515,26 +508,6 @@ function SettingsModal({
         <section className="modal-section" aria-label="Accessibility settings">
           <p className="modal-section-title">Accessibility</p>
           <div className="audio-follow-row">
-            <label htmlFor={COLOR_BLIND_SWITCH_ID} className="audio-follow-label">
-              <span>Color Blind Mode</span>
-              <small>Adds non-color cues for status and highlights.</small>
-            </label>
-            <button
-              id={COLOR_BLIND_SWITCH_ID}
-              type="button"
-              className="mode-switch"
-              role="switch"
-              aria-checked={isColorBlindMode}
-              onClick={() => void onToggleColorBlindMode()}
-              title="Toggle Color Blind Mode"
-            >
-              <span className="mode-switch-track" aria-hidden="true">
-                <span className="mode-switch-knob" />
-              </span>
-              <span className="mode-switch-text">{isColorBlindMode ? 'On' : 'Off'}</span>
-            </button>
-          </div>
-          <div className="audio-follow-row">
             <label htmlFor={COLOR_BLIND_TYPE_SELECT_ID} className="audio-follow-label">
               <span>Color Blind Filter</span>
               <small>Choose the color-vision simulation type for webpages.</small>
@@ -546,7 +519,6 @@ function SettingsModal({
               onChange={(event) => {
                 void onColorBlindFilterChange(event.target.value as ColorBlindFilterOption);
               }}
-              disabled={!isColorBlindMode}
             >
               <option value="none">No Filter</option>
               <option value="protanopia">Protanopia (Red-blind)</option>
@@ -666,7 +638,6 @@ function App() {
   const [question, setQuestion] = useState('');
   const [isAsking, setIsAsking] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isColorBlindMode, setIsColorBlindMode] = useState(false);
   const [colorBlindFilter, setColorBlindFilterState] = useState<ColorBlindFilterOption>('none');
   const [isReduceMotion, setIsReduceMotion] = useState(false);
   const [forcedFont, setForcedFontState] = useState<ForcedFontOption>('none');
@@ -830,8 +801,7 @@ function App() {
           (typeof localStorageState?.[LEGACY_API_KEY_STORAGE_KEY] === 'string' &&
             localStorageState[LEGACY_API_KEY_STORAGE_KEY].trim().length > 0);
 
-        const [nextColorBlindMode, nextColorBlindFilter, nextReduceMotion, nextAudioRate, nextAudioFollow, nextForcedFont] = await Promise.all([
-          getColorBlindModeEnabled(),
+        const [nextColorBlindFilter, nextReduceMotion, nextAudioRate, nextAudioFollow, nextForcedFont] = await Promise.all([
           getColorBlindFilter(),
           getReduceMotionEnabled(),
           getAudioRate(),
@@ -839,7 +809,6 @@ function App() {
           getForcedFont(),
         ]);
         setHasApiKey(storageHasKey || Boolean(settings.hasApiKey));
-        setIsColorBlindMode(nextColorBlindMode);
         setColorBlindFilterState(nextColorBlindFilter);
         setIsReduceMotion(nextReduceMotion);
         setForcedFontState(nextForcedFont);
@@ -1382,17 +1351,6 @@ function App() {
       ? 'Ready for grounded Q&A.'
       : status.message;
 
-  const toggleColorBlindMode = useCallback(async () => {
-    const next = !isColorBlindMode;
-    setIsColorBlindMode(next);
-    try {
-      await setColorBlindModeEnabled(next);
-    } catch (saveError) {
-      setIsColorBlindMode(!next);
-      setError(saveError instanceof Error ? saveError.message : 'Failed to update accessibility mode.');
-    }
-  }, [isColorBlindMode]);
-
   const handleColorBlindFilterChange = useCallback(async (nextFilter: ColorBlindFilterOption) => {
     setColorBlindFilterState(nextFilter);
     try {
@@ -1583,7 +1541,7 @@ function App() {
   }, [activePane, messages.length]);
 
   return (
-    <div className={`unity-shell ${isColorBlindMode ? 'unity-shell--cbm' : ''}`.trim()}>
+    <div className="unity-shell">
       <header className="unity-header">
         <div>
           <p className="kicker">Unity</p>
@@ -2054,11 +2012,9 @@ function App() {
         open={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         hasApiKey={hasApiKey}
-        isColorBlindMode={isColorBlindMode}
         colorBlindFilter={colorBlindFilter}
         isReduceMotion={isReduceMotion}
         forcedFont={forcedFont}
-        onToggleColorBlindMode={toggleColorBlindMode}
         onColorBlindFilterChange={handleColorBlindFilterChange}
         onToggleReduceMotion={toggleReduceMotion}
         onForcedFontChange={handleForcedFontChange}

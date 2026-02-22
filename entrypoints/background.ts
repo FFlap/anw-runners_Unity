@@ -6,7 +6,6 @@ import {
   clearTabContext,
   getApiKey,
   getChatSession,
-  getColorBlindModeEnabled,
   getContext,
   getReport,
   hasApiKey,
@@ -205,7 +204,6 @@ function clearHighlightsInPage() {
 function highlightAndScrollSnippetInPage(
   quote: string,
   sourceId: string,
-  colorBlindMode = false,
 ): boolean {
   const styleId = 'unity-source-highlight-style';
   const marks = Array.from(document.querySelectorAll('mark[data-unity-source-id]'));
@@ -216,24 +214,7 @@ function highlightAndScrollSnippetInPage(
     parent.normalize();
   }
 
-  const highlightCss = colorBlindMode
-    ? `
-      mark[data-unity-source-id] {
-        background: linear-gradient(
-          90deg,
-          rgba(0, 95, 204, 0.9) 0 0.32em,
-          rgba(255, 236, 173, 0.86) 0,
-          rgba(255, 248, 218, 0.94) 100%
-        );
-        border-left: 5px solid rgba(0, 74, 159, 0.98);
-        border-bottom: 2px solid rgba(131, 95, 0, 0.95);
-        color: inherit;
-        border-radius: 0.22em;
-        padding: 0 0.08em 0 0.18em;
-        box-shadow: 0 0 0 2px rgba(0, 95, 204, 0.35);
-      }
-    `
-    : `
+  const highlightCss = `
       mark[data-unity-source-id] {
         background: linear-gradient(90deg, rgba(255,213,79,0.5), rgba(255,241,118,0.75));
         border-bottom: 2px solid rgba(181,137,0,0.9);
@@ -391,9 +372,7 @@ function highlightAndScrollSnippetInPage(
   }
 
   mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  mark.style.outline = colorBlindMode
-    ? '3px solid rgba(0,95,204,0.72)'
-    : '2px solid rgba(181,137,0,0.7)';
+  mark.style.outline = '2px solid rgba(181,137,0,0.7)';
   window.setTimeout(() => {
     mark.style.outline = '';
   }, 1800);
@@ -1064,13 +1043,12 @@ async function jumpToSourceSnippet(tabId: number, source: SourceSnippet): Promis
     ),
   );
   if (quoteCandidates.length === 0) return false;
-  const colorBlindModeEnabled = await getColorBlindModeEnabled().catch(() => false);
 
   for (const quote of quoteCandidates) {
     const highlighted = await executeOnTab<boolean>(
       tabId,
       highlightAndScrollSnippetInPage,
-      [quote, source.id, colorBlindModeEnabled],
+      [quote, source.id],
     );
     if (highlighted) return true;
   }
