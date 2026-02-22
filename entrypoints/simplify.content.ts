@@ -646,6 +646,7 @@ function classifyFromAutocomplete(autocomplete: string): AutofillFieldKey | null
     if (token === 'postal-code') return 'postalZip';
     if (token === 'country' || token === 'country-name') return 'country';
     if (token === 'tel' || token.startsWith('tel-')) return 'phone';
+    if (token === 'bday' || token === 'birthday' || token === 'birthdate' || token === 'dob') return 'birthMonthYear';
   }
 
   return null;
@@ -679,6 +680,12 @@ function classifyFieldKey({
   const hasPhoneSignal = /\b(phone|mobile|telephone|tel|cell)\b/.test(signal);
   const hasFirstNameSignal = /\b(first|given)\s+name\b|\bgivenname\b|\bfname\b/.test(signal);
   const hasLastNameSignal = /\b(last|family|sur|surname)\s+name\b|\bfamilyname\b|\blname\b/.test(signal);
+  const hasBirthSignal = /\b(date\s*of\s*birth|birth\s*date|birthdate|month\s*and\s*year\s*of\s*birth|month\s*year\s*of\s*birth|dob|born)\b/.test(
+    signal,
+  );
+  const hasMonthSignal = /\b(month|mm)\b/.test(signal);
+  const hasYearSignal = /\b(year|yyyy)\b/.test(signal);
+  const hasBirthMonthYearSignal = hasBirthSignal && ((hasMonthSignal && hasYearSignal) || /\bmm\s*yyyy\b/.test(signal));
   const hasAddressLine2Signal =
     /\b(address|addr)\s*(line)?\s*2\b|\b(address|addr)\s*(line)?\s*two\b|\bapt\b|\bapartment\b|\bsuite\b|\bste\b|\bunit\b|\bbuilding\b|\bfloor\b|\bfl\b/.test(
       signal,
@@ -696,6 +703,7 @@ function classifyFieldKey({
 
   if (hasEmailSignal) return 'email';
   if (hasPhoneSignal) return 'phone';
+  if (hasBirthMonthYearSignal || (inputType === 'month' && hasBirthSignal)) return 'birthMonthYear';
   if (hasAddressLine2Signal) return 'addressLine2';
   if (hasAddressLine1Signal) return 'addressLine1';
   if (hasCitySignal) return 'city';

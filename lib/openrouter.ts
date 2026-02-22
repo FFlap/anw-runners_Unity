@@ -97,6 +97,25 @@ function extractJsonBlock(input: string): string {
     return fenced[1].trim();
   }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   const balanced = extractBalancedJsonDocument(input);
   if (balanced) {
     return balanced;
@@ -170,6 +189,16 @@ function parseResponseText(response: OpenRouterResponse): string {
   throw new Error('OpenRouter response did not contain text content.');
 }
 
+
+
+
+
+
+
+
+
+
+
 export async function callOpenRouterJson<T>(options: OpenRouterCallOptions): Promise<T> {
   const { apiKey, prompt, timeoutMs = 70_000 } = options;
   let lastParseError: Error | null = null;
@@ -242,6 +271,18 @@ export async function callOpenRouterJson<T>(options: OpenRouterCallOptions): Pro
       clearTimeout(timer);
     }
   }
+
+
+
+
+
+
+
+
+
+
+
+
 
   throw new Error(
     `OpenRouter response was not valid JSON after strict retry: ${lastParseError?.message ?? 'unknown error.'}`,

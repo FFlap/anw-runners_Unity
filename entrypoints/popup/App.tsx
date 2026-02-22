@@ -228,6 +228,7 @@ const profileFieldConfigs: Array<{
   { key: 'lastName', label: 'Last Name', autoComplete: 'family-name' },
   { key: 'email', label: 'Email', type: 'email', autoComplete: 'email' },
   { key: 'phone', label: 'Phone', type: 'tel', autoComplete: 'tel' },
+  { key: 'birthMonthYear', label: 'Month / Year of Birth', autoComplete: 'bday' },
   { key: 'addressLine1', label: 'Address Line 1', autoComplete: 'address-line1' },
   { key: 'addressLine2', label: 'Address Line 2', autoComplete: 'address-line2' },
   { key: 'city', label: 'City', autoComplete: 'address-level2' },
@@ -252,6 +253,8 @@ function getProfileValueForFieldKey(
       return profile.fullName;
     case 'phone':
       return profile.phone;
+    case 'birthMonthYear':
+      return profile.birthMonthYear;
     case 'addressLine1':
       return profile.addressLine1;
     case 'addressLine2':
@@ -294,6 +297,8 @@ function getFieldKeyLabel(fieldKey: AutofillFieldKey | null): string {
       return 'fullName';
     case 'phone':
       return 'phone';
+    case 'birthMonthYear':
+      return 'birthMonthYear';
     case 'addressLine1':
       return 'addressLine1';
     case 'addressLine2':

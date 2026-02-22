@@ -111,6 +111,7 @@ export interface AutofillProfile {
   lastName: string;
   email: string;
   phone: string;
+  birthMonthYear: string;
   addressLine1: string;
   addressLine2: string;
   city: string;
@@ -125,6 +126,7 @@ export type AutofillFieldKey =
   | 'lastName'
   | 'fullName'
   | 'phone'
+  | 'birthMonthYear'
   | 'addressLine1'
   | 'addressLine2'
   | 'city'
