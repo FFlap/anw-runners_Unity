@@ -159,6 +159,18 @@ export type RuntimeRequest =
   | { type: 'GET_SETTINGS' }
   | { type: 'SIMPLIFY_TEXT'; text: string; level?: RewriteLevel }
   | { type: 'SUMMARIZE_TEXT'; text: string; level?: RewriteLevel }
+  | { type: 'SERP_FETCH_PAGE_PREVIEW'; url: string }
+  | {
+      type: 'SERP_AI_RANK_RESULTS';
+      userIntent: string;
+      results: Array<{
+        title: string;
+        url: string;
+        snippet: string;
+        domain: string;
+        preview?: string;
+      }>;
+    }
   | { type: 'START_SCAN'; tabId?: number }
   | { type: 'GET_EMBEDDED_PANEL_STATE' }
   | { type: 'GET_SCAN_STATUS'; tabId?: number }
