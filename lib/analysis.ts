@@ -1,5 +1,12 @@
 import { callOpenRouterJson } from '@/lib/openrouter';
-import type { ChatAnswer, ContextSnippet, SourceSnippet, TabContext, TranscriptSegment } from '@/lib/types';
+import type {
+  ChatAnswer,
+  ContextSnippet,
+  MainArticleBlock,
+  SourceSnippet,
+  TabContext,
+  TranscriptSegment,
+} from '@/lib/types';
 
 const MAX_WEB_SNIPPETS = 240;
 const MAX_SNIPPET_LENGTH = 280;
@@ -25,17 +32,24 @@ function truncateForSnippet(value: string): string {
 }
 
 function tokenize(value: string): string[] {
+  const normalizeToken = (token: string): string => {
+    if (token.length > 4 && token.endsWith('ies')) return `${token.slice(0, -3)}y`;
+    if (token.length > 4 && token.endsWith('ses')) return token.slice(0, -2);
+    if (token.length > 4 && token.endsWith('s') && !token.endsWith('ss')) return token.slice(0, -1);
+    return token;
+  };
+
   return value
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
+    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token))
+    .map((token) => normalizeToken(token));
 }
 
-function buildWebSnippets(text: string): ContextSnippet[] {
-  const lines = text
-    .split(/\n+/)
+function buildWebSnippetsFromLines(lines: string[]): ContextSnippet[] {
+  const normalizedLines = lines
     .map((line) => normalizeWhitespace(line))
     .filter((line) => line.length >= 30);
 
@@ -52,7 +66,7 @@ function buildWebSnippets(text: string): ContextSnippet[] {
     pending = '';
   };
 
-  for (const line of lines) {
+  for (const line of normalizedLines) {
     if (!pending) {
       pending = line;
       continue;
@@ -69,6 +83,14 @@ function buildWebSnippets(text: string): ContextSnippet[] {
   }
 
   flush();
+  return snippets;
+}
+
+function buildWebSnippets(text: string): ContextSnippet[] {
+  const lines = text
+    .split(/\n+/)
+    .map((line) => normalizeWhitespace(line));
+  const snippets = buildWebSnippetsFromLines(lines);
 
   if (snippets.length === 0) {
     const fallback = normalizeWhitespace(text).slice(0, 1400);
@@ -77,6 +99,27 @@ function buildWebSnippets(text: string): ContextSnippet[] {
     }
   }
 
+  return snippets.slice(0, MAX_WEB_SNIPPETS);
+}
+
+function buildWebSnippetsFromArticleBlocks(blocks: MainArticleBlock[]): ContextSnippet[] {
+  const contextualLines: string[] = [];
+  let activeHeading = '';
+
+  for (const block of blocks) {
+    const text = normalizeWhitespace(block.text);
+    if (!text) continue;
+
+    if (block.type === 'heading') {
+      activeHeading = text;
+      continue;
+    }
+
+    if (text.length < 28) continue;
+    contextualLines.push(activeHeading ? `${activeHeading}. ${text}` : text);
+  }
+
+  const snippets = buildWebSnippetsFromLines(contextualLines);
   return snippets.slice(0, MAX_WEB_SNIPPETS);
 }
 
@@ -95,11 +138,21 @@ function buildTranscriptSnippets(segments: TranscriptSegment[]): ContextSnippet[
 export function buildContextSnippets(input: {
   text: string;
   transcriptSegments?: TranscriptSegment[];
+  mainArticleBlocks?: MainArticleBlock[];
 }): ContextSnippet[] {
   const transcriptSegments = input.transcriptSegments ?? [];
   if (transcriptSegments.length > 0) {
     return buildTranscriptSnippets(transcriptSegments);
   }
+
+  const mainArticleBlocks = input.mainArticleBlocks ?? [];
+  if (mainArticleBlocks.length > 0) {
+    const blockSnippets = buildWebSnippetsFromArticleBlocks(mainArticleBlocks);
+    if (blockSnippets.length > 0) {
+      return blockSnippets;
+    }
+  }
+
   return buildWebSnippets(input.text);
 }
 
@@ -299,6 +352,10 @@ function coerceSources(inputSources: ModelResponse['sources'], ranked: SourceSni
     const score = Number.isFinite(scoreRaw)
       ? Math.max(0, Math.min(1, scoreRaw))
       : base.score;
+    const quote =
+      typeof candidate?.quote === 'string'
+        ? normalizeWhitespace(candidate.quote)
+        : '';
 
     if (picked.some((item) => item.id === base.id)) continue;
 
@@ -307,6 +364,7 @@ function coerceSources(inputSources: ModelResponse['sources'], ranked: SourceSni
       // Keep original extracted snippet text for reliable in-page/source matching.
       text: base.text,
       score,
+      ...(quote.length >= 8 ? { quote } : {}),
     });
   }
 
@@ -346,12 +404,22 @@ export async function answerQuestionFromContext(input: {
   }
 
   const contextText = input.context.text.slice(0, MAX_CONTEXT_CHARS);
-  const snippets = input.context.snippets.length > 0
-    ? input.context.snippets
-    : buildContextSnippets({
-      text: contextText,
-      transcriptSegments: input.context.transcript?.segments,
-    });
+  const regeneratedWebSnippets =
+    input.context.scanKind === 'webpage' && (input.context.mainArticle?.blocks?.length ?? 0) > 0
+      ? buildContextSnippets({
+        text: contextText,
+        mainArticleBlocks: input.context.mainArticle?.blocks,
+      })
+      : [];
+  const snippets = regeneratedWebSnippets.length > 0
+    ? regeneratedWebSnippets
+    : input.context.snippets.length > 0
+      ? input.context.snippets
+      : buildContextSnippets({
+        text: contextText,
+        transcriptSegments: input.context.transcript?.segments,
+        mainArticleBlocks: input.context.mainArticle?.blocks,
+      });
 
   if (snippets.length === 0) {
     return {
