@@ -2,6 +2,7 @@ const UNITY_SERP_STYLE_ID = 'unity-serp-intel-style';
 const UNITY_SERP_PANEL_ID = 'unity-serp-intel-panel';
 const UNITY_SERP_CANDIDATE_BADGE_ATTR = 'data-unity-serp-candidate-badge';
 const UNITY_SERP_RECOMMENDATIONS_ID = 'unity-serp-recommendations';
+const UNITY_SERP_TARGET_HIGHLIGHT_CLASS = 'unity-serp-target-highlight';
 
 const INPUT_STOP_WORDS = new Set([
   'a', 'an', 'and', 'are', 'as', 'at', 'be', 'best', 'by', 'for', 'from', 'how', 'i', 'if',
@@ -66,6 +67,9 @@ type SerpAiRankResponse = {
 };
 
 const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeof browser;
+let activeHighlightHost: HTMLElement | null = null;
+let activeHighlightWrapper: HTMLSpanElement | null = null;
+let highlightResetTimer: number | null = null;
 
 function normalizeText(value: string | null | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim();
@@ -281,6 +285,62 @@ function tagTopCandidateResults(results: RankedSerpResult[], topN = 5) {
   }
 }
 
+function clearActiveHighlight() {
+  if (highlightResetTimer !== null) {
+    window.clearTimeout(highlightResetTimer);
+    highlightResetTimer = null;
+  }
+
+  if (activeHighlightHost && activeHighlightWrapper && activeHighlightWrapper.parentElement === activeHighlightHost) {
+    while (activeHighlightWrapper.firstChild) {
+      activeHighlightHost.insertBefore(activeHighlightWrapper.firstChild, activeHighlightWrapper);
+    }
+    activeHighlightWrapper.remove();
+  }
+
+  activeHighlightHost = null;
+  activeHighlightWrapper = null;
+}
+
+function applyFlashingTextHighlight(titleNode: HTMLHeadingElement) {
+  clearActiveHighlight();
+  if (!titleNode.isConnected) return;
+
+  const wrapper = document.createElement('span');
+  wrapper.className = UNITY_SERP_TARGET_HIGHLIGHT_CLASS;
+
+  while (titleNode.firstChild) {
+    wrapper.appendChild(titleNode.firstChild);
+  }
+  titleNode.appendChild(wrapper);
+
+  activeHighlightHost = titleNode;
+  activeHighlightWrapper = wrapper;
+
+  highlightResetTimer = window.setTimeout(() => {
+    clearActiveHighlight();
+  }, 2800);
+}
+
+function focusResultOnPage(result: RankedSerpResult) {
+  const target = result.titleNode.closest<HTMLElement>('.MjjYud, .g') ?? result.titleNode;
+  if (!target) return;
+
+  target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+  applyFlashingTextHighlight(result.titleNode);
+}
+
+function createRedirectButton(result: RankedSerpResult): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'unity-serp-reco-action';
+  button.textContent = 'Redirect to article';
+  button.addEventListener('click', () => {
+    focusResultOnPage(result);
+  });
+  return button;
+}
+
 function renderTopRecommendations(container: HTMLElement, ranked: RankedSerpResult[]) {
   container.replaceChildren();
   const topThree = ranked.slice(0, 3);
@@ -293,12 +353,11 @@ function renderTopRecommendations(container: HTMLElement, ranked: RankedSerpResu
     const item = document.createElement('li');
     item.className = 'unity-serp-reco-item';
 
-    const titleLink = document.createElement('a');
-    titleLink.className = 'unity-serp-reco-title';
-    titleLink.href = result.url;
-    titleLink.target = '_blank';
-    titleLink.rel = 'noreferrer noopener';
-    titleLink.textContent = result.title;
+    const title = document.createElement('p');
+    title.className = 'unity-serp-reco-title';
+    title.textContent = result.title;
+
+    const action = createRedirectButton(result);
 
     const domain = document.createElement('p');
     domain.className = 'unity-serp-reco-domain';
@@ -308,7 +367,7 @@ function renderTopRecommendations(container: HTMLElement, ranked: RankedSerpResu
     why.className = 'unity-serp-reco-why';
     why.textContent = result.why;
 
-    item.append(titleLink, domain, why);
+    item.append(title, action, domain, why);
     list.appendChild(item);
   }
 
@@ -331,12 +390,11 @@ function renderTopRecommendationsWithPreviews(
     const item = document.createElement('li');
     item.className = 'unity-serp-reco-item';
 
-    const titleLink = document.createElement('a');
-    titleLink.className = 'unity-serp-reco-title';
-    titleLink.href = result.url;
-    titleLink.target = '_blank';
-    titleLink.rel = 'noreferrer noopener';
-    titleLink.textContent = result.title;
+    const title = document.createElement('p');
+    title.className = 'unity-serp-reco-title';
+    title.textContent = result.title;
+
+    const action = createRedirectButton(result);
 
     const domain = document.createElement('p');
     domain.className = 'unity-serp-reco-domain';
@@ -358,7 +416,7 @@ function renderTopRecommendationsWithPreviews(
       normalizeText(preview?.metaDescription) ||
       'Preview unavailable for this page.';
 
-    item.append(titleLink, domain, why, previewTitle, previewBody);
+    item.append(title, action, domain, why, previewTitle, previewBody);
     list.appendChild(item);
   }
 
@@ -541,13 +599,57 @@ function installStyles() {
     }
 
     #${UNITY_SERP_PANEL_ID} .unity-serp-reco-title {
-      display: inline-block;
+      display: block;
       color: #111;
       font-size: 12px;
       font-weight: 700;
-      text-decoration: underline;
-      text-underline-offset: 2px;
+      text-decoration: none;
       margin: 0 0 4px;
+    }
+
+    #${UNITY_SERP_PANEL_ID} .unity-serp-reco-action {
+      border: 1px solid #111;
+      border-radius: 999px;
+      background: #fff;
+      color: #111;
+      padding: 4px 9px;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      margin: 0 0 6px;
+    }
+
+    #${UNITY_SERP_PANEL_ID} .unity-serp-reco-action:hover {
+      background: #111;
+      color: #fff;
+    }
+
+    #search .${UNITY_SERP_TARGET_HIGHLIGHT_CLASS} {
+      color: inherit;
+      background: transparent;
+      padding: 0 4px;
+      border-radius: 2px;
+      box-decoration-break: clone;
+      -webkit-box-decoration-break: clone;
+      animation: unity-serp-text-highlight-flash 2400ms linear 1 forwards;
+    }
+
+    @keyframes unity-serp-text-highlight-flash {
+      0%,
+      8%,
+      40%,
+      52%,
+      84%,
+      100% {
+        background: transparent;
+      }
+
+      18%,
+      30%,
+      62%,
+      74% {
+        background: rgba(17, 17, 17, 0.22);
+      }
     }
 
     #${UNITY_SERP_PANEL_ID} .unity-serp-reco-domain {
