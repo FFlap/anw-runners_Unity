@@ -62,6 +62,15 @@ type AskResponse = {
   session?: ChatSession;
   error?: string;
 };
+type LocalMessageState = 'pending' | 'failed';
+type LocalChatMessage = ChatMessage & {
+  localState: LocalMessageState;
+  localOnly: true;
+};
+type RenderedChatMessage = ChatMessage & {
+  localState?: LocalMessageState;
+  localOnly?: true;
+};
 type PopupTab = 'chat' | 'reader' | 'audio' | 'profile' | 'autofill';
 type ToastState = {
   tone: 'success' | 'error';
@@ -391,6 +400,23 @@ function sourceLabel(source: SourceSnippet, index: number): string {
   return `Source ${index + 1}`;
 }
 
+function createLocalMessageId(prefix: 'user'): string {
+  const entropy = Math.random().toString(36).slice(2, 8);
+  return `${prefix}-local-${Date.now()}-${entropy}`;
+}
+
+function messageTimestampMs(iso: string): number {
+  const parsed = Date.parse(iso);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function compareMessagesByCreatedAt(
+  left: Pick<RenderedChatMessage, 'createdAt'>,
+  right: Pick<RenderedChatMessage, 'createdAt'>,
+): number {
+  return messageTimestampMs(left.createdAt) - messageTimestampMs(right.createdAt);
+}
+
 function SettingsModal({
   open,
   onClose,
@@ -551,18 +577,32 @@ function MessageBubble({
   message,
   onJump,
 }: {
-  message: ChatMessage;
+  message: RenderedChatMessage;
   onJump: (source: SourceSnippet) => void;
 }) {
   const isAssistant = message.role === 'assistant';
+  const localState = !isAssistant ? message.localState : undefined;
+  const failedState = localState === 'failed' ? 'failed' : undefined;
+  const bubbleClassName = [
+    'bubble',
+    isAssistant ? 'bubble--assistant' : 'bubble--user',
+    failedState ? `bubble--${failedState}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return (
-    <article className={`bubble ${isAssistant ? 'bubble--assistant' : 'bubble--user'}`}>
+    <article className={bubbleClassName} data-local-state={failedState ?? ''}>
       <div className="bubble-head">
         <span>{isAssistant ? 'Unity' : 'You'}</span>
         <time>{formatTimestamp(message.createdAt)}</time>
       </div>
       <p className="bubble-text">{message.text}</p>
+      {!isAssistant && failedState ? (
+        <p className={`bubble-local-state bubble-local-state--${failedState}`}>
+          Send failed
+        </p>
+      ) : null}
       {isAssistant && (message.sources?.length ?? 0) > 0 && (
         <div className="sources-wrap">
           {message.sources?.map((source, index) => (
@@ -593,6 +633,7 @@ function App() {
     updatedAt: Date.now(),
   });
   const [session, setSession] = useState<ChatSession | null>(null);
+  const [localOptimisticMessages, setLocalOptimisticMessages] = useState<LocalChatMessage[]>([]);
   const [question, setQuestion] = useState('');
   const [isAsking, setIsAsking] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -629,6 +670,7 @@ function App() {
   const recognitionRef = useRef<DictationRecognitionLike | null>(null);
   const dictationActiveRef = useRef(false);
   const silenceTimerRef = useRef<number | null>(null);
+  const chatFeedRef = useRef<HTMLElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const pendingCursorRef = useRef<number | null>(null);
   const toastTimerRef = useRef<number | null>(null);
@@ -799,13 +841,14 @@ function App() {
     if (activeTabId == null) return;
 
     const timer = window.setInterval(() => {
+      if (isAsking) return;
       void refreshTabData(activeTabId).catch(() => {
         // Ignore transient wakeup failures.
       });
     }, 1700);
 
     return () => window.clearInterval(timer);
-  }, [activeTabId, refreshTabData]);
+  }, [activeTabId, isAsking, refreshTabData]);
 
   useEffect(() => {
     setDetectedFormFields([]);
@@ -817,6 +860,7 @@ function App() {
     setReaderStatus('Apply a clean article layout on the current page.');
     setReaderError(null);
     setIsReaderBusy(false);
+    setLocalOptimisticMessages([]);
   }, [activeTabId]);
 
   useEffect(() => {
@@ -993,6 +1037,7 @@ function App() {
     try {
       await sendMessage<{ ok: boolean }>({ type: 'CLEAR_CHAT_SESSION', tabId: activeTabId });
       setSession((previous) => (previous ? { ...previous, messages: [] } : null));
+      setLocalOptimisticMessages([]);
     } catch (clearError) {
       setError(clearError instanceof Error ? clearError.message : 'Failed to clear chat.');
     }
@@ -1000,7 +1045,8 @@ function App() {
 
   const askQuestion = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (activeTabId == null || !question.trim()) return;
+    const trimmedQuestion = question.trim();
+    if (activeTabId == null || !trimmedQuestion) return;
 
     if (dictationActiveRef.current) {
       try {
@@ -1010,14 +1056,28 @@ function App() {
       }
     }
 
+    const optimisticMessageId = createLocalMessageId('user');
+    const optimisticMessage: LocalChatMessage = {
+      id: optimisticMessageId,
+      role: 'user',
+      text: trimmedQuestion,
+      createdAt: new Date().toISOString(),
+      localState: 'pending',
+      localOnly: true,
+    };
+
     setError(null);
+    setLocalOptimisticMessages((previous) =>
+      [...previous, optimisticMessage].sort(compareMessagesByCreatedAt),
+    );
+    setQuestion('');
     setIsAsking(true);
 
     try {
       const response = await sendMessage<AskResponse>({
         type: 'ASK_CHAT_QUESTION',
         tabId: activeTabId,
-        question: question.trim(),
+        question: trimmedQuestion,
       });
 
       if (!response.ok || !response.session) {
@@ -1025,14 +1085,20 @@ function App() {
       }
 
       setSession(response.session);
-      setQuestion('');
-      await refreshTabData(activeTabId);
+      setLocalOptimisticMessages((previous) =>
+        previous.filter((message) => message.id !== optimisticMessageId),
+      );
     } catch (askError) {
+      setLocalOptimisticMessages((previous) =>
+        previous.map((message) =>
+          message.id === optimisticMessageId ? { ...message, localState: 'failed' } : message,
+        ),
+      );
       setError(askError instanceof Error ? askError.message : 'Question failed.');
     } finally {
       setIsAsking(false);
     }
-  }, [activeTabId, question, refreshTabData]);
+  }, [activeTabId, question]);
 
   const toggleDictation = useCallback(async () => {
     const recognition = recognitionRef.current;
@@ -1272,7 +1338,12 @@ function App() {
     }));
   }, []);
 
-  const messages = useMemo(() => session?.messages ?? [], [session?.messages]);
+  const messages = useMemo<RenderedChatMessage[]>(() => {
+    const persistedMessages = session?.messages ?? [];
+    const merged = [...persistedMessages, ...localOptimisticMessages];
+    if (merged.length < 2) return merged;
+    return [...merged].sort(compareMessagesByCreatedAt);
+  }, [localOptimisticMessages, session?.messages]);
   const isComposerDisabled = !hasApiKey || activeTabId == null || isAsking;
   const statusMessage =
     status.message === 'Ready to scan this tab.'
@@ -1456,7 +1527,19 @@ function App() {
       ? 'Speaking'
       : audioSelectionText.length > 0 || audioState.hasSelection
         ? 'Ready'
-        : 'Idle';
+      : 'Idle';
+
+  useEffect(() => {
+    if (activePane !== 'chat') return;
+    const chatFeed = chatFeedRef.current;
+    if (!chatFeed) return;
+
+    window.requestAnimationFrame(() => {
+      const activeFeed = chatFeedRef.current;
+      if (!activeFeed) return;
+      activeFeed.scrollTop = activeFeed.scrollHeight;
+    });
+  }, [activePane, messages.length]);
 
   return (
     <div className={`unity-shell ${isColorBlindMode ? 'unity-shell--cbm' : ''}`.trim()}>
@@ -1544,7 +1627,7 @@ function App() {
             </section>
           )}
 
-          <section className="chat-feed" data-testid="chat-feed">
+          <section className="chat-feed" data-testid="chat-feed" ref={chatFeedRef}>
             {messages.map((message) => (
               <MessageBubble key={message.id} message={message} onJump={jumpToSource} />
             ))}

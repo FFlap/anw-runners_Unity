@@ -338,6 +338,24 @@ select {
   color: #000;
   border-bottom-left-radius: 6px;
 }
+.bubble--user.bubble--failed {
+  border: 2px solid var(--unity-danger);
+  background: var(--unity-danger-bg);
+  color: var(--unity-danger);
+}
+.bubble--user.bubble--failed .bubble-head {
+  color: var(--unity-danger);
+}
+.bubble-local-state {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.bubble-local-state--failed {
+  color: var(--unity-danger);
+}
 .bubble-head {
   display: flex;
   align-items: center;
@@ -1178,6 +1196,17 @@ select {
 
 .unity-shell--cbm .bubble--assistant {
   border-left-color: var(--unity-accent);
+}
+
+.unity-shell--cbm .bubble--user.bubble--failed {
+  border-left-color: var(--unity-danger);
+  border-color: var(--unity-danger);
+  background: var(--unity-danger-bg);
+}
+
+.unity-shell--cbm .bubble-local-state--failed {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .unity-shell--cbm .error-text {

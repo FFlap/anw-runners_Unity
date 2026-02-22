@@ -1,4 +1,5 @@
 import type {
+  ChatMessage,
   ChatSession,
   EmbeddedPanelUpdate,
   ScanReport,
@@ -29,6 +30,15 @@ interface EmbeddedStateResponse {
   report: ScanReport | null;
   session: ChatSession | null;
 }
+
+type LocalMessageState = 'pending' | 'failed';
+
+interface LocalOptimisticChatMessage extends ChatMessage {
+  localState: LocalMessageState;
+  localOnly: true;
+}
+
+type RenderedChatMessage = ChatMessage | LocalOptimisticChatMessage;
 
 function isWatchUrl(url: string): boolean {
   try {
@@ -77,6 +87,23 @@ function isYouTubeFullscreen(): boolean {
   if (Boolean(fullscreenDocument.mozFullScreenElement)) return true;
 
   return document.querySelector('.html5-video-player.ytp-fullscreen') !== null;
+}
+
+function createLocalMessageId(prefix: 'user'): string {
+  const entropy = Math.random().toString(36).slice(2, 8);
+  return `${prefix}-local-${Date.now()}-${entropy}`;
+}
+
+function messageTimestampMs(iso: string): number {
+  const parsed = Date.parse(iso);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function compareMessagesByCreatedAt(
+  left: Pick<RenderedChatMessage, 'createdAt'>,
+  right: Pick<RenderedChatMessage, 'createdAt'>,
+): number {
+  return messageTimestampMs(left.createdAt) - messageTimestampMs(right.createdAt);
 }
 
 function normalizeUrlWithoutHash(url: string): string {
@@ -507,6 +534,14 @@ function installStyles() {
       background: var(--unity-panel-bubble-assistant-bg);
       border-bottom-left-radius: 6px;
     }
+    #${PANEL_ID} .unity-bubble--user.unity-bubble--failed {
+      border: 2px solid var(--unity-panel-error);
+      background: var(--unity-panel-error-bg);
+      color: var(--unity-panel-error);
+    }
+    #${PANEL_ID} .unity-bubble--user.unity-bubble--failed .unity-bubble-head {
+      color: var(--unity-panel-error);
+    }
     #${PANEL_ID}[data-color-blind-mode="true"] .unity-bubble--user,
     #${PANEL_ID}[data-color-blind-mode="true"] .unity-bubble--assistant {
       border-left: 4px solid;
@@ -516,6 +551,11 @@ function installStyles() {
     }
     #${PANEL_ID}[data-color-blind-mode="true"] .unity-bubble--assistant {
       border-left-color: var(--unity-panel-btn-hover);
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-bubble--user.unity-bubble--failed {
+      border-left-color: var(--unity-panel-error);
+      border-color: var(--unity-panel-error);
+      background: var(--unity-panel-error-bg);
     }
     #${PANEL_ID} .unity-bubble-head {
       display: flex;
@@ -536,6 +576,20 @@ function installStyles() {
     }
     #${PANEL_ID} .unity-bubble--user .unity-bubble-head {
       color: var(--unity-panel-bubble-user-muted);
+    }
+    #${PANEL_ID} .unity-bubble-local-state {
+      margin: 0;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    #${PANEL_ID} .unity-bubble-local-state--failed {
+      color: var(--unity-panel-error);
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-bubble-local-state--failed {
+      text-decoration: underline;
+      text-underline-offset: 2px;
     }
     #${PANEL_ID} .unity-source-row {
       display: flex;
@@ -875,11 +929,13 @@ export default defineContentScript({
     let watchedVideo: HTMLVideoElement | null = null;
     let colorBlindModeEnabled = false;
     let activeTab: 'chat' | 'transcript' = 'chat';
+    let localOptimisticMessages: LocalOptimisticChatMessage[] = [];
 
     let composerFocused = false;
     let composerSelectionStart = 0;
     let composerSelectionEnd = 0;
     let lastRenderedFingerprint = '';
+    let lastRenderedChatFingerprint = '';
 
     const applyColorBlindModeAttribute = () => {
       if (!panelRoot) return;
@@ -891,10 +947,18 @@ export default defineContentScript({
       return reported.length > 0 ? reported : transcriptSegments;
     };
 
+    const getRenderedChatMessages = (): RenderedChatMessage[] => {
+      const persistedMessages = session?.messages ?? [];
+      const merged = [...persistedMessages, ...localOptimisticMessages];
+      if (merged.length < 2) return merged;
+      return [...merged].sort(compareMessagesByCreatedAt);
+    };
+
     const viewFingerprint = (): string => [
       statusFingerprint(status),
       reportFingerprint(report),
       sessionFingerprint(session),
+      localOptimisticMessages.map((message) => `${message.id}:${message.localState}`).join(','),
       transcriptSegments.length,
       transcriptLoading ? '1' : '0',
       transcriptResolved ? '1' : '0',
@@ -913,6 +977,8 @@ export default defineContentScript({
         if (dictationActive) {
           stopDictation();
         }
+        localOptimisticMessages = [];
+        lastRenderedChatFingerprint = '';
         panelRoot?.remove();
         panelRoot = null;
         return;
@@ -922,6 +988,8 @@ export default defineContentScript({
         if (dictationActive) {
           stopDictation();
         }
+        localOptimisticMessages = [];
+        lastRenderedChatFingerprint = '';
         panelRoot?.remove();
         panelRoot = null;
         return;
@@ -1266,6 +1334,8 @@ export default defineContentScript({
               tabId,
             });
             session = session ? { ...session, messages: [] } : null;
+            localOptimisticMessages = [];
+            lastRenderedChatFingerprint = '';
           } catch (error) {
             localError = error instanceof Error ? error.message : 'Failed to clear chat.';
           }
@@ -1316,6 +1386,8 @@ export default defineContentScript({
       body.appendChild(tabs);
 
       let input: HTMLTextAreaElement | null = null;
+      let chatList: HTMLElement | null = null;
+      let chatMessageFingerprint = '';
       if (activeTab === 'chat') {
         const chatPanel = document.createElement('section');
         chatPanel.className = 'unity-tab-panel unity-tab-panel--chat';
@@ -1323,17 +1395,35 @@ export default defineContentScript({
         const chat = document.createElement('div');
         chat.className = 'unity-chat';
         chat.setAttribute('data-testid', 'unity-chat-list');
+        chatList = chat;
 
-        const messages = session?.messages ?? [];
+        const messages = getRenderedChatMessages();
+        chatMessageFingerprint = messages
+          .map((message) => {
+            const localState = 'localState' in message ? message.localState : '';
+            return `${message.id}:${localState}`;
+          })
+          .join('|');
         if (messages.length > 0) {
           for (const message of messages) {
             const bubble = document.createElement('article');
-            bubble.className = `unity-bubble unity-bubble--${message.role === 'assistant' ? 'assistant' : 'user'}`;
+            const isAssistant = message.role === 'assistant';
+            const localState =
+              !isAssistant && 'localState' in message ? message.localState : undefined;
+            const failedState = localState === 'failed' ? 'failed' : undefined;
+            bubble.className = [
+              'unity-bubble',
+              `unity-bubble--${isAssistant ? 'assistant' : 'user'}`,
+              failedState ? `unity-bubble--${failedState}` : '',
+            ]
+              .filter(Boolean)
+              .join(' ');
+            bubble.dataset.localState = failedState ?? '';
 
             const bubbleHead = document.createElement('div');
             bubbleHead.className = 'unity-bubble-head';
             const speaker = document.createElement('span');
-            speaker.textContent = message.role === 'assistant' ? 'Unity' : 'You';
+            speaker.textContent = isAssistant ? 'Unity' : 'You';
             const ts = document.createElement('span');
             ts.textContent = formatTime(message.createdAt);
             bubbleHead.append(speaker, ts);
@@ -1343,8 +1433,14 @@ export default defineContentScript({
             text.textContent = message.text;
 
             bubble.append(bubbleHead, text);
+            if (!isAssistant && failedState) {
+              const stateLine = document.createElement('p');
+              stateLine.className = `unity-bubble-local-state unity-bubble-local-state--${failedState}`;
+              stateLine.textContent = 'Send failed';
+              bubble.appendChild(stateLine);
+            }
 
-            if (message.role === 'assistant' && (message.sources?.length ?? 0) > 0) {
+            if (isAssistant && (message.sources?.length ?? 0) > 0) {
               const sourceRow = document.createElement('div');
               sourceRow.className = 'unity-source-row';
               for (let index = 0; index < (message.sources?.length ?? 0); index += 1) {
@@ -1383,12 +1479,28 @@ export default defineContentScript({
         compose.className = 'unity-compose';
         compose.addEventListener('submit', (event) => {
           event.preventDefault();
-          if (isAsking || !question.trim()) return;
+          const trimmedQuestion = question.trim();
+          if (isAsking || !trimmedQuestion) return;
           if (dictationActive) {
             stopDictation();
           }
 
+          const optimisticMessageId = createLocalMessageId('user');
+          const optimisticMessage: LocalOptimisticChatMessage = {
+            id: optimisticMessageId,
+            role: 'user',
+            text: trimmedQuestion,
+            createdAt: new Date().toISOString(),
+            localState: 'pending',
+            localOnly: true,
+          };
+
           void (async () => {
+            localOptimisticMessages = [...localOptimisticMessages, optimisticMessage].sort(compareMessagesByCreatedAt);
+            question = '';
+            composerSelectionStart = 0;
+            composerSelectionEnd = 0;
+            composerFocused = true;
             isAsking = true;
             localError = null;
             render();
@@ -1399,7 +1511,7 @@ export default defineContentScript({
                 { ok: boolean; session?: ChatSession; error?: string }
               >({
                 type: 'ASK_CHAT_QUESTION',
-                question: question.trim(),
+                question: trimmedQuestion,
                 ...(tabId ? { tabId } : {}),
               });
 
@@ -1408,10 +1520,13 @@ export default defineContentScript({
               }
 
               session = response.session;
-              question = '';
-              composerSelectionStart = 0;
-              composerSelectionEnd = 0;
+              localOptimisticMessages = localOptimisticMessages.filter(
+                (message) => message.id !== optimisticMessageId,
+              );
             } catch (error) {
+              localOptimisticMessages = localOptimisticMessages.map((message) =>
+                message.id === optimisticMessageId ? { ...message, localState: 'failed' } : message,
+              );
               localError = error instanceof Error ? error.message : 'Question failed.';
             } finally {
               isAsking = false;
@@ -1459,7 +1574,7 @@ export default defineContentScript({
         clearChatButton.type = 'button';
         clearChatButton.className = 'unity-ghost-btn';
         clearChatButton.textContent = 'Clear';
-        clearChatButton.disabled = (session?.messages.length ?? 0) === 0;
+        clearChatButton.disabled = messages.length === 0;
         clearChatButton.addEventListener('click', clearChat);
 
         const dictationButton = document.createElement('button');
@@ -1602,6 +1717,18 @@ export default defineContentScript({
         });
       }
 
+      if (activeTab === 'chat' && chatList) {
+        const shouldAutoScroll =
+          chatMessageFingerprint !== '' && chatMessageFingerprint !== lastRenderedChatFingerprint;
+        if (shouldAutoScroll) {
+          window.requestAnimationFrame(() => {
+            if (!chatList || !chatList.isConnected) return;
+            chatList.scrollTop = chatList.scrollHeight;
+          });
+        }
+        lastRenderedChatFingerprint = chatMessageFingerprint;
+      }
+
       updateCurrentTranscriptHighlight();
     };
 
@@ -1612,6 +1739,8 @@ export default defineContentScript({
         if (dictationActive) {
           stopDictation();
         }
+        localOptimisticMessages = [];
+        lastRenderedChatFingerprint = '';
         panelRoot?.remove();
         panelRoot = null;
         return;
@@ -1796,6 +1925,8 @@ export default defineContentScript({
             watchedVideo.removeEventListener('seeked', onVideoTimelineUpdate);
             watchedVideo = null;
           }
+          localOptimisticMessages = [];
+          lastRenderedChatFingerprint = '';
           panelRoot?.remove();
           panelRoot = null;
           return;
@@ -1809,6 +1940,7 @@ export default defineContentScript({
         };
         report = null;
         session = null;
+        localOptimisticMessages = [];
         question = '';
         isAsking = false;
         localError = null;
@@ -1824,6 +1956,7 @@ export default defineContentScript({
         composerSelectionStart = 0;
         composerSelectionEnd = 0;
         lastRenderedFingerprint = '';
+        lastRenderedChatFingerprint = '';
 
         ensurePanelMounted();
         syncVideoListener();
